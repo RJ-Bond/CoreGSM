@@ -1,4 +1,5 @@
 import { Switch } from '../components/Switch';
+import { ListToolbar } from '../ui/lists';
 import { useState } from 'react';
 import { t, useI18n } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
@@ -22,6 +23,10 @@ export default function NewsPage({ sub }: { sub: string }) {
 
 const BUSY = new Set(['queued', 'sending', 'edit_queued', 'delete_queued']);
 
+type NewsFilter = 'all' | 'draft' | 'scheduled' | 'sent' | 'error';
+/** the group of a news item for the filter: what is being sent counts with the scheduled ones */
+const groupOfNews = (n: NewsItem): Exclude<NewsFilter, 'all'> => (n.status === 'draft' ? 'draft' : n.status === 'sent' || n.status === 'edit_queued' || n.status === 'delete_queued' ? 'sent' : n.status === 'error' ? 'error' : 'scheduled');
+
 function StatusPill({ n }: { n: NewsItem }) {
   useI18n();
   switch (n.status) {
@@ -44,9 +49,13 @@ const excerpt = (n: NewsItem) => {
 function NewsList() {
   useI18n();
   const [items, setItems] = useState<NewsItem[]>([]);
+  const [q, setQ] = useState('');
+  const [st, setSt] = useState<NewsFilter>('all');
   // items removed with «Отменить» pending stay hidden until the request is sent
   const [hidden, setHidden] = useState<number[]>([]);
   const list = items.filter((n) => !hidden.includes(n.id));
+  const needle = q.trim().toLowerCase();
+  const shown = list.filter((n) => (st === 'all' || groupOfNews(n) === st) && (!needle || n.title.toLowerCase().includes(needle)));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
@@ -263,6 +272,20 @@ function NewsList() {
         </div>
       )}
 
+      {list.length > 5 && view === 'list' && (
+        <ListToolbar
+          label={t('d2.news.f.label')}
+          search={q}
+          onSearch={setQ}
+          placeholder={t('d2.news.f.search')}
+          value={st}
+          onChange={setSt}
+          states={(['all', 'draft', 'scheduled', 'sent', 'error'] as const)
+            .map((id) => ({ id, label: t(`d2.news.f.${id}` as 'd2.news.f.all'), count: id === 'all' ? list.length : list.filter((n) => groupOfNews(n) === id).length }))
+            .filter((s) => s.id === 'all' || s.id === st || (s.count ?? 0) > 0)}
+        />
+      )}
+
       {list.length > 1 && view === 'list' && (
         <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
           <label className="flex items-center gap-2 font-bold">
@@ -281,7 +304,8 @@ function NewsList() {
       )}
 
       <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
-        {list.map((n) => {
+        {shown.length === 0 && list.length > 0 && <p className="col-span-full py-6 text-center font-semibold text-mute">{t('d2.news.f.none')}</p>}
+        {shown.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
             <article key={n.id} className={`panel flex flex-col gap-3 overflow-hidden p-5 ${picked.includes(n.id) ? 'ring-2 ring-brand/60' : ''}`} style={{ borderTop: `4px solid ${color}` }}>

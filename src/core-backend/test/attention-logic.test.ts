@@ -68,3 +68,16 @@ describe('buildAttention: the restore check', () => {
     assert.deepEqual(buildAttention(base({ backupCheck: null })), []);
   });
 });
+
+describe('buildAttention: the plugin and the appeals', () => {
+  it('shows a silent plugin as a warning, an old one and open appeals as information', () => {
+    const r = buildAttention(base({ pluginsSilent: ['Alpha', 'Beta'], pluginsOld: 1, openAppeals: 3 }));
+    assert.deepEqual(r.map((x) => x.id), ['plugin_silent', 'plugin_old', 'appeals_open']);
+    assert.equal(r[0]!.tone, 'warn');
+    assert.equal(r[0]!.text, 'Alpha, Beta');
+    assert.equal(r[2]!.n, 3);
+  });
+  it('says nothing when there are none', () => {
+    assert.deepEqual(buildAttention(base({ pluginsSilent: [], pluginsOld: 0, openAppeals: 0 })), []);
+  });
+});

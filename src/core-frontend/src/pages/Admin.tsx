@@ -21,7 +21,7 @@ import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import { AdminServersTable } from './AdminServersTable';
 import { moveId } from './adminServersLogic';
-import { SetupProgress } from './AdminStart';
+import { SetupProgress, useStartSteps } from './AdminStart';
 import JournalPage from './Journal';
 import GameNewsPage from './GameNews';
 import MaintenancePage from './Maintenance';
@@ -72,6 +72,9 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
   useI18n();
   const { isAdmin, me } = useAuth();
+  // «Начало работы» leaves the menu when every step is done or skipped (the page itself stays at /admin/start)
+  const setup = useStartSteps();
+  const showStart = !setup.loading && !setup.resolved;
   const [section, ...rest] = sub.split('/');
   // a moderator sees the sections of the permissions the administrator gave; everything else is for administrators
   const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => SECTION_PERM[s.id] && (me?.perms ?? []).includes(SECTION_PERM[s.id]!));
@@ -218,7 +221,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
 
   // a phone: one button with the current section instead of the sideways strip
   const mobileGroups: MobileNavGroup[] = isAdmin
-    ? [{ key: 'top', sections: [START_SECTION, OVERVIEW_SECTION] }, ...ADMIN_GROUPS.map((g, i) => ({ key: `g${i}`, title: g.title, sections: g.sections }))]
+    ? [{ key: 'top', sections: showStart ? [START_SECTION, OVERVIEW_SECTION] : [OVERVIEW_SECTION] }, ...ADMIN_GROUPS.map((g, i) => ({ key: `g${i}`, title: g.title, sections: g.sections }))]
     : [{ key: 'all', sections }];
 
   return (
@@ -233,7 +236,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
               <span className="min-w-0 flex-1 truncate text-left">{t('adm.nav.search')}</span>
               <kbd>Ctrl K</kbd>
             </button>
-            {link(START_SECTION)}
+            {showStart && link(START_SECTION)}
             {link(OVERVIEW_SECTION)}
             <SetupProgress />
             {pinned.length > 0 && (

@@ -15,6 +15,8 @@ import { log } from '../logger.js';
 import { inMaintenance } from '../maintenance.js';
 import { checkCert } from '../admin/ops.js';
 import { updateWaitingLabel } from '../routes/updates.js';
+import { isOlder, silentMinutes } from '../gamenews/gameNewsPluginAlerts.js';
+import { PLUGIN_VERSION } from '../gamenews/gameNews.js';
 import { buildAttention, diskFreePct, diskLevel, shouldAlertDisk, type DiskLevel } from './attentionLogic.js';
 
 const NAME_SQL = `COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)`;
@@ -75,6 +77,19 @@ function backupCheckNow(): { ok: boolean; name: string } | null {
   return v && listBackups().some((b) => b.name === v.name) ? { ok: v.ok, name: v.name } : null;
 }
 
+/** the plugins that went silent and the ones that are old: for the list of what needs a look */
+export function pluginSignals(now: number): { pluginsSilent: string[]; pluginsOld: number } {
+  try {
+    const rows = db.prepare(`SELECT t.server_id, t.last_seen, t.plugin_version, ${NAME_SQL} AS name FROM game_news_targets t JOIN servers s ON s.id = t.server_id LEFT JOIN status st ON st.server_id = s.id WHERE t.token_hash <> '' AND t.last_seen > 0`).all() as { last_seen: number; plugin_version: string; name: string }[];
+    const limit = silentMinutes() * 60_000;
+    const silent = rows.filter((r) => now - r.last_seen > limit);
+    const old = rows.filter((r) => now - r.last_seen <= limit && isOlder(r.plugin_version, PLUGIN_VERSION));
+    return { pluginsSilent: silent.map((r) => r.name), pluginsOld: old.length };
+  } catch {
+    return { pluginsSilent: [], pluginsOld: 0 };
+  }
+}
+
 export function registerAttention({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/admin/attention', admin, async (_req, res) => {
     const now = Date.now();
@@ -95,6 +110,8 @@ export function registerAttention({ app, admin }: { app: Express; admin: Request
       botState: botStateNow(now) === 'none' ? 'online' : botStateNow(now),
       disk: diskNow(),
       pendingUsers: n("SELECT COUNT(*) AS c FROM users WHERE status = 'pending'"),
+      ...pluginSignals(now),
+      openAppeals: n("SELECT COUNT(*) AS c FROM ban_appeals WHERE status = 'open'"),
       openReports: n("SELECT COUNT(*) AS c FROM player_reports WHERE status = 'open'"),
       flaggedComments: n("SELECT COUNT(*) AS c FROM news_comments c WHERE c.status = 'visible' AND EXISTS (SELECT 1 FROM news_comment_flags f WHERE f.comment_id = c.id)"),
     });

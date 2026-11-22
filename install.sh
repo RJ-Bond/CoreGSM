@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="40081bd90c12"
+COREGSM_BUILD="a7fba46e76df"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.75"
+COREGSM_VERSION="1.2.76"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -18165,6 +18165,8 @@ import { log } from '../logger.js';
 import { inMaintenance } from '../maintenance.js';
 import { checkCert } from '../admin/ops.js';
 import { updateWaitingLabel } from '../routes/updates.js';
+import { isOlder, silentMinutes } from '../gamenews/gameNewsPluginAlerts.js';
+import { PLUGIN_VERSION } from '../gamenews/gameNews.js';
 import { buildAttention, diskFreePct, diskLevel, shouldAlertDisk, type DiskLevel } from './attentionLogic.js';
 
 const NAME_SQL = `COALESCE(NULLIF(s.name, ''), NULLIF(st.name, ''), NULLIF(s.display_address, ''), s.host || ':' || s.port)`;
@@ -18225,6 +18227,19 @@ function backupCheckNow(): { ok: boolean; name: string } | null {
   return v && listBackups().some((b) => b.name === v.name) ? { ok: v.ok, name: v.name } : null;
 }
 
+/** the plugins that went silent and the ones that are old: for the list of what needs a look */
+export function pluginSignals(now: number): { pluginsSilent: string[]; pluginsOld: number } {
+  try {
+    const rows = db.prepare(`SELECT t.server_id, t.last_seen, t.plugin_version, ${NAME_SQL} AS name FROM game_news_targets t JOIN servers s ON s.id = t.server_id LEFT JOIN status st ON st.server_id = s.id WHERE t.token_hash <> '' AND t.last_seen > 0`).all() as { last_seen: number; plugin_version: string; name: string }[];
+    const limit = silentMinutes() * 60_000;
+    const silent = rows.filter((r) => now - r.last_seen > limit);
+    const old = rows.filter((r) => now - r.last_seen <= limit && isOlder(r.plugin_version, PLUGIN_VERSION));
+    return { pluginsSilent: silent.map((r) => r.name), pluginsOld: old.length };
+  } catch {
+    return { pluginsSilent: [], pluginsOld: 0 };
+  }
+}
+
 export function registerAttention({ app, admin }: { app: Express; admin: RequestHandler }): void {
   app.get('/api/admin/attention', admin, async (_req, res) => {
     const now = Date.now();
@@ -18245,6 +18260,8 @@ export function registerAttention({ app, admin }: { app: Express; admin: Request
       botState: botStateNow(now) === 'none' ? 'online' : botStateNow(now),
       disk: diskNow(),
       pendingUsers: n("SELECT COUNT(*) AS c FROM users WHERE status = 'pending'"),
+      ...pluginSignals(now),
+      openAppeals: n("SELECT COUNT(*) AS c FROM ban_appeals WHERE status = 'open'"),
       openReports: n("SELECT COUNT(*) AS c FROM player_reports WHERE status = 'open'"),
       flaggedComments: n("SELECT COUNT(*) AS c FROM news_comments c WHERE c.status = 'visible' AND EXISTS (SELECT 1 FROM news_comment_flags f WHERE f.comment_id = c.id)"),
     });
@@ -18267,7 +18284,7 @@ __COREGSM_EOF__
 /** The admin «needs attention» list: pure rules (what is shown and in which order), no I/O. */
 export type AttentionTone = 'bad' | 'warn' | 'info';
 export type AttentionKind =
-  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'backup_unreadable' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
+  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'backup_unreadable' | 'cert' | 'update' | 'bot' | 'disk' | 'plugin_silent' | 'plugin_old' | 'appeals_open' | 'users_pending' | 'reports' | 'comments';
 
 export interface AttentionItem {
   id: AttentionKind;
@@ -18292,6 +18309,12 @@ export interface AttentionInput {
   disk: { free: number; total: number } | null;
   pendingUsers: number;
   openReports: number;
+  /** servers whose game plugin has stopped asking the panel (names) */
+  pluginsSilent?: string[];
+  /** servers with a plugin older than the latest one */
+  pluginsOld?: number;
+  /** appeals of the banned that wait for an answer */
+  openAppeals?: number;
   flaggedComments: number;
 }
 
@@ -18329,6 +18352,9 @@ export function buildAttention(i: AttentionInput): AttentionItem[] {
     if (days > backupMaxAgeDays(i.backup.schedule)) out.push({ id: 'backup_old', tone: 'warn', n: days, href: '/admin/settings/backups' });
   }
   if (i.backupCheck && !i.backupCheck.ok) out.push({ id: 'backup_unreadable', tone: 'bad', text: i.backupCheck.name, href: '/admin/settings/backups' });
+  if (i.pluginsSilent?.length) out.push({ id: 'plugin_silent', tone: 'warn', n: i.pluginsSilent.length, text: i.pluginsSilent.slice(0, 3).join(', '), href: '/admin/gamenews' });
+  if ((i.pluginsOld ?? 0) > 0) out.push({ id: 'plugin_old', tone: 'info', n: i.pluginsOld, href: '/admin/gamenews' });
+  if ((i.openAppeals ?? 0) > 0) out.push({ id: 'appeals_open', tone: 'info', n: i.openAppeals, href: '/bans' });
   if (i.pendingUsers > 0) out.push({ id: 'users_pending', tone: 'info', n: i.pendingUsers, href: '/admin/users' });
   if (i.openReports > 0) out.push({ id: 'reports', tone: 'info', n: i.openReports, href: '/admin/community' });
   if (i.flaggedComments > 0) out.push({ id: 'comments', tone: 'info', n: i.flaggedComments, href: '/admin/community' });
@@ -125935,7 +125961,7 @@ interface Item { id: string; tone: Tone; n?: number; text?: string; href: string
 const POLL_MS = 60_000;
 const TITLE: Record<string, TKey> = {
   servers_down: 'att.servers_down', deliveries_dead: 'att.deliveries_dead', backup_none: 'att.backup_none', backup_old: 'att.backup_old', backup_unreadable: 'att.backup_unreadable',
-  cert: 'att.cert', update: 'att.update', bot: 'att.bot', disk: 'att.disk', users_pending: 'att.users_pending', reports: 'att.reports', comments: 'att.comments',
+  cert: 'att.cert', update: 'att.update', bot: 'att.bot', disk: 'att.disk', plugin_silent: 'att.plugin_silent', plugin_old: 'att.plugin_old', appeals_open: 'att.appeals_open', users_pending: 'att.users_pending', reports: 'att.reports', comments: 'att.comments',
 };
 const DOT: Record<Tone, string> = { bad: 'bg-bad', warn: 'bg-warn', info: 'bg-brand' };
 
@@ -151413,7 +151439,7 @@ const en: Record<keyof typeof ru, string> = {
   'start.hint': 'Everything to set up first is here. Steps are ticked off automatically as you do them in the panel.',
   'start.help': 'If you do not need a step (for example, you have no Discord), press “Skip”: it stops counting as unfinished. A skipped step can be brought back at any time.',
   'start.allDone': 'Done: everything is set up',
-  'start.allDoneText': 'The panel runs by itself: the bot updates messages, alerts watch the servers. You can come back here from the menu on the left.',
+  'start.allDoneText': 'The panel runs by itself: the bot updates messages, alerts watch the servers. The page is gone from the menu; you can still open it at /admin/start.',
   'start.toServers': 'Go to servers',
   'start.stepsDone': '{a} of {b} steps done',
   'start.left': 'Left: {list}.',
@@ -152023,6 +152049,9 @@ const en: Record<keyof typeof ru, string> = {
   'att.users_pending': 'Registration requests wait for a decision: {n}',
   'att.reports': 'Player reports wait for review: {n}',
   'att.comments': 'Flagged comments wait for moderation: {n}',
+  'att.plugin_silent': 'The game plugin does not answer: {text}',
+  'att.plugin_old': 'The plugin is out of date on servers: {n}',
+  'att.appeals_open': 'Ban appeals wait for an answer: {n}',
   'al.k.disk': 'Disk space',
   'adm.com.polls': 'Polls',
   'al.k.poll': 'Poll',
@@ -152962,6 +152991,14 @@ const en: Record<keyof typeof ru, string> = {
   'd2.news.st.deleting': 'DELETING',
   'd2.news.st.sent': 'PUBLISHED',
   'd2.news.st.error': 'ERROR',
+  'd2.news.f.label': 'Filter of the news',
+  'd2.news.f.search': 'Search by title',
+  'd2.news.f.all': 'All',
+  'd2.news.f.draft': 'Drafts',
+  'd2.news.f.scheduled': 'Waiting to be published',
+  'd2.news.f.sent': 'Published',
+  'd2.news.f.error': 'With an error',
+  'd2.news.f.none': 'Nothing fits the filter',
   'd2.news.st.pinned': 'PINNED',
   'd2.news.rep.daily': 'EVERY DAY',
   'd2.news.rep.weekly': 'EVERY WEEK',
@@ -156928,7 +156965,7 @@ const ru = {
   'start.hint': 'Здесь собрано всё, что нужно настроить в первую очередь. Шаги отмечаются сами, когда вы делаете их в панели.',
   'start.help': 'Если шаг вам не нужен (например, нет Discord), нажмите «Пропустить»: он перестанет считаться незавершённым. Пропущенный шаг можно вернуть в любой момент.',
   'start.allDone': 'Завершено: всё настроено',
-  'start.allDoneText': 'Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Вернуться сюда можно из меню слева.',
+  'start.allDoneText': 'Панель работает сама: бот обновляет сообщения, оповещения следят за серверами. Из меню эта страница убрана; открыть её можно по адресу /admin/start.',
   'start.toServers': 'Перейти к серверам',
   'start.stepsDone': '{a} из {b} шагов выполнено',
   'start.left': 'Осталось: {list}.',
@@ -157538,6 +157575,9 @@ const ru = {
   'att.users_pending': 'Заявки на регистрацию ждут решения: {n}',
   'att.reports': 'Жалобы игроков ждут разбора: {n}',
   'att.comments': 'Комментарии с жалобами ждут модерации: {n}',
+  'att.plugin_silent': 'Игровой плагин не отвечает: {text}',
+  'att.plugin_old': 'Плагин устарел на серверах: {n}',
+  'att.appeals_open': 'Заявки на разбан ждут ответа: {n}',
   'al.k.disk': 'Место на диске',
   'adm.com.polls': 'Голосования',
   'al.k.poll': 'Голосование',
@@ -158477,6 +158517,14 @@ const ru = {
   'd2.news.st.deleting': 'УДАЛЯЕТСЯ',
   'd2.news.st.sent': 'ОПУБЛИКОВАНО',
   'd2.news.st.error': 'ОШИБКА',
+  'd2.news.f.label': 'Фильтр новостей',
+  'd2.news.f.search': 'Поиск по заголовку',
+  'd2.news.f.all': 'Все',
+  'd2.news.f.draft': 'Черновики',
+  'd2.news.f.scheduled': 'Ждут публикации',
+  'd2.news.f.sent': 'Опубликованы',
+  'd2.news.f.error': 'С ошибкой',
+  'd2.news.f.none': 'Под фильтр ничего не подходит',
   'd2.news.st.pinned': 'ЗАКРЕПЛЕНО',
   'd2.news.rep.daily': 'КАЖДЫЙ ДЕНЬ',
   'd2.news.rep.weekly': 'КАЖДУЮ НЕДЕЛЮ',
@@ -160486,7 +160534,7 @@ import NewsPage from './News';
 import ServerForm, { emptyServer } from './ServerForm';
 import { AdminServersTable } from './AdminServersTable';
 import { moveId } from './adminServersLogic';
-import { SetupProgress } from './AdminStart';
+import { SetupProgress, useStartSteps } from './AdminStart';
 import JournalPage from './Journal';
 import GameNewsPage from './GameNews';
 import MaintenancePage from './Maintenance';
@@ -160537,6 +160585,9 @@ function useNavBadges(isAdmin: boolean, perms: string[]): Record<string, NavBadg
 export default function AdminPage({ sub, updateAvailable }: { sub: string; updateAvailable: boolean }) {
   useI18n();
   const { isAdmin, me } = useAuth();
+  // «Начало работы» leaves the menu when every step is done or skipped (the page itself stays at /admin/start)
+  const setup = useStartSteps();
+  const showStart = !setup.loading && !setup.resolved;
   const [section, ...rest] = sub.split('/');
   // a moderator sees the sections of the permissions the administrator gave; everything else is for administrators
   const sections = isAdmin ? ADMIN_SECTIONS : ADMIN_SECTIONS.filter((s) => SECTION_PERM[s.id] && (me?.perms ?? []).includes(SECTION_PERM[s.id]!));
@@ -160683,7 +160734,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
 
   // a phone: one button with the current section instead of the sideways strip
   const mobileGroups: MobileNavGroup[] = isAdmin
-    ? [{ key: 'top', sections: [START_SECTION, OVERVIEW_SECTION] }, ...ADMIN_GROUPS.map((g, i) => ({ key: `g${i}`, title: g.title, sections: g.sections }))]
+    ? [{ key: 'top', sections: showStart ? [START_SECTION, OVERVIEW_SECTION] : [OVERVIEW_SECTION] }, ...ADMIN_GROUPS.map((g, i) => ({ key: `g${i}`, title: g.title, sections: g.sections }))]
     : [{ key: 'all', sections }];
 
   return (
@@ -160698,7 +160749,7 @@ export default function AdminPage({ sub, updateAvailable }: { sub: string; updat
               <span className="min-w-0 flex-1 truncate text-left">{t('adm.nav.search')}</span>
               <kbd>Ctrl K</kbd>
             </button>
-            {link(START_SECTION)}
+            {showStart && link(START_SECTION)}
             {link(OVERVIEW_SECTION)}
             <SetupProgress />
             {pinned.length > 0 && (
@@ -162455,7 +162506,7 @@ interface Raw {
 const len = (v: unknown) => (Array.isArray(v) ? v.length : null);
 
 /** Reads the real state of the panel and turns it into the checklist. A failing request only marks its step «неизвестно». */
-function useStartSteps() {
+export function useStartSteps() {
   const { me, access } = useAuth();
   const { lang } = useI18n();
   const username = me?.username ?? '';
@@ -169397,6 +169448,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/News.tsx" << '__COREGSM_EOF__'
 import { Switch } from '../components/Switch';
+import { ListToolbar } from '../ui/lists';
 import { useState } from 'react';
 import { t, useI18n } from '../i18n';
 import { NewsCalendar } from '../components/news/Calendar';
@@ -169420,6 +169472,10 @@ export default function NewsPage({ sub }: { sub: string }) {
 
 const BUSY = new Set(['queued', 'sending', 'edit_queued', 'delete_queued']);
 
+type NewsFilter = 'all' | 'draft' | 'scheduled' | 'sent' | 'error';
+/** the group of a news item for the filter: what is being sent counts with the scheduled ones */
+const groupOfNews = (n: NewsItem): Exclude<NewsFilter, 'all'> => (n.status === 'draft' ? 'draft' : n.status === 'sent' || n.status === 'edit_queued' || n.status === 'delete_queued' ? 'sent' : n.status === 'error' ? 'error' : 'scheduled');
+
 function StatusPill({ n }: { n: NewsItem }) {
   useI18n();
   switch (n.status) {
@@ -169442,9 +169498,13 @@ const excerpt = (n: NewsItem) => {
 function NewsList() {
   useI18n();
   const [items, setItems] = useState<NewsItem[]>([]);
+  const [q, setQ] = useState('');
+  const [st, setSt] = useState<NewsFilter>('all');
   // items removed with «Отменить» pending stay hidden until the request is sent
   const [hidden, setHidden] = useState<number[]>([]);
   const list = items.filter((n) => !hidden.includes(n.id));
+  const needle = q.trim().toLowerCase();
+  const shown = list.filter((n) => (st === 'all' || groupOfNews(n) === st) && (!needle || n.title.toLowerCase().includes(needle)));
   const [settings, setSettings] = useState<NewsSettings | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [stats, setStats] = useState<{ id: number; title: string } | null>(null);
@@ -169661,6 +169721,20 @@ function NewsList() {
         </div>
       )}
 
+      {list.length > 5 && view === 'list' && (
+        <ListToolbar
+          label={t('d2.news.f.label')}
+          search={q}
+          onSearch={setQ}
+          placeholder={t('d2.news.f.search')}
+          value={st}
+          onChange={setSt}
+          states={(['all', 'draft', 'scheduled', 'sent', 'error'] as const)
+            .map((id) => ({ id, label: t(`d2.news.f.${id}` as 'd2.news.f.all'), count: id === 'all' ? list.length : list.filter((n) => groupOfNews(n) === id).length }))
+            .filter((s) => s.id === 'all' || s.id === st || (s.count ?? 0) > 0)}
+        />
+      )}
+
       {list.length > 1 && view === 'list' && (
         <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
           <label className="flex items-center gap-2 font-bold">
@@ -169679,7 +169753,8 @@ function NewsList() {
       )}
 
       <div className={`fade-in grid gap-4 md:grid-cols-2 ${view === 'calendar' ? 'hidden' : ''}`}>
-        {list.map((n) => {
+        {shown.length === 0 && list.length > 0 && <p className="col-span-full py-6 text-center font-semibold text-mute">{t('d2.news.f.none')}</p>}
+        {shown.map((n) => {
           const color = `#${(n.payload.embed?.color ?? 0x5865f2).toString(16).padStart(6, '0')}`;
           return (
             <article key={n.id} className={`panel flex flex-col gap-3 overflow-hidden p-5 ${picked.includes(n.id) ? 'ring-2 ring-brand/60' : ''}`} style={{ borderTop: `4px solid ${color}` }}>

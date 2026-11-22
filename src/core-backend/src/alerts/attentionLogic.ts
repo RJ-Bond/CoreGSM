@@ -1,7 +1,7 @@
 /** The admin «needs attention» list: pure rules (what is shown and in which order), no I/O. */
 export type AttentionTone = 'bad' | 'warn' | 'info';
 export type AttentionKind =
-  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'backup_unreadable' | 'cert' | 'update' | 'bot' | 'disk' | 'users_pending' | 'reports' | 'comments';
+  | 'servers_down' | 'deliveries_dead' | 'backup_none' | 'backup_old' | 'backup_unreadable' | 'cert' | 'update' | 'bot' | 'disk' | 'plugin_silent' | 'plugin_old' | 'appeals_open' | 'users_pending' | 'reports' | 'comments';
 
 export interface AttentionItem {
   id: AttentionKind;
@@ -26,6 +26,12 @@ export interface AttentionInput {
   disk: { free: number; total: number } | null;
   pendingUsers: number;
   openReports: number;
+  /** servers whose game plugin has stopped asking the panel (names) */
+  pluginsSilent?: string[];
+  /** servers with a plugin older than the latest one */
+  pluginsOld?: number;
+  /** appeals of the banned that wait for an answer */
+  openAppeals?: number;
   flaggedComments: number;
 }
 
@@ -63,6 +69,9 @@ export function buildAttention(i: AttentionInput): AttentionItem[] {
     if (days > backupMaxAgeDays(i.backup.schedule)) out.push({ id: 'backup_old', tone: 'warn', n: days, href: '/admin/settings/backups' });
   }
   if (i.backupCheck && !i.backupCheck.ok) out.push({ id: 'backup_unreadable', tone: 'bad', text: i.backupCheck.name, href: '/admin/settings/backups' });
+  if (i.pluginsSilent?.length) out.push({ id: 'plugin_silent', tone: 'warn', n: i.pluginsSilent.length, text: i.pluginsSilent.slice(0, 3).join(', '), href: '/admin/gamenews' });
+  if ((i.pluginsOld ?? 0) > 0) out.push({ id: 'plugin_old', tone: 'info', n: i.pluginsOld, href: '/admin/gamenews' });
+  if ((i.openAppeals ?? 0) > 0) out.push({ id: 'appeals_open', tone: 'info', n: i.openAppeals, href: '/bans' });
   if (i.pendingUsers > 0) out.push({ id: 'users_pending', tone: 'info', n: i.pendingUsers, href: '/admin/users' });
   if (i.openReports > 0) out.push({ id: 'reports', tone: 'info', n: i.openReports, href: '/admin/community' });
   if (i.flaggedComments > 0) out.push({ id: 'comments', tone: 'info', n: i.flaggedComments, href: '/admin/community' });

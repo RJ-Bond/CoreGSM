@@ -44,7 +44,7 @@ interface Raw {
 const len = (v: unknown) => (Array.isArray(v) ? v.length : null);
 
 /** Reads the real state of the panel and turns it into the checklist. A failing request only marks its step «неизвестно». */
-function useStartSteps() {
+export function useStartSteps() {
   const { me, access } = useAuth();
   const { lang } = useI18n();
   const username = me?.username ?? '';
