@@ -274,7 +274,7 @@ export function ListSkeleton() {
 }
 
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
-const hostOf = (address: string): string => address.replace(/:d+$/, '');
+const hostOf = (address: string): string => address.replace(/:\d+$/, '');
 
 export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
   useI18n();

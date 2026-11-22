@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="a7fba46e76df"
+COREGSM_BUILD="74a944789c43"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.76"
+COREGSM_VERSION="1.2.77"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -145357,7 +145357,7 @@ export function ListSkeleton() {
 }
 
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
-const hostOf = (address: string): string => address.replace(/:d+$/, '');
+const hostOf = (address: string): string => address.replace(/:\d+$/, '');
 
 export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
   useI18n();

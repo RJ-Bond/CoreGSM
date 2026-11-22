@@ -19,6 +19,7 @@ interface language; the GitHub release text is built from the section of the ver
 ## 1.2.75 · 22.11.2026
 
 ### 🐛 Исправлено | Fixed
+- 🐛 На карточках серверов порт в адресе показывался дважды (203.0.113.10:27015:27015) | On the server cards the port in the address was shown twice (203.0.113.10:27015:27015)
 - ✂ Чат из Discord в игру: у повторённой строки в канале убрано «→ в игру», остаётся строка как в игровом чате (время, пометка, слова); карточка под сообщением и реакции без изменений | Chat from Discord into the game: the repeated line in the channel no longer starts with «→ в игру», it is the line as in the game chat (time, mark, words); the card under the message and the reactions are unchanged
 - 📝 Автообъявление: кнопка «Сохранить» больше не «мёртвая» без названия: при нажатии показывается, чего не хватает (например, «Введите название»), а поле названия получает фокус | Auto announcement: the «Save» button is no longer dead without a name: pressing it shows what is missing (for example «Enter a name») and focuses the name field
 - 📱 Меню «⋯» у строки (автообъявления и другие списки): на телефоне, когда кнопка оказывалась у левого края, меню обрезалось экраном и не было видно; теперь оно открывается от кнопки, а у автообъявления кнопка «⋯» стоит справа в первой строке | The «⋯» menu of a row (auto announcements and other lists): on a phone, when the button ended up at the left edge, the menu was cut off by the screen and could not be seen; it now opens from the button, and in an auto announcement the «⋯» button stays at the right of the first row
