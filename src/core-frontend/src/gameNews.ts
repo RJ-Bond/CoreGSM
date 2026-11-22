@@ -281,6 +281,8 @@ export interface KickSettings {
   warnDays: number;
   warnAction: 'kick' | 'ban';
   warnBanTime: string;
+  /** the ladder of warnings; empty = the single limit above */
+  ladder: { at: number; action: 'kick' | 'ban'; time: string }[];
   rejoinBlockMin: number;
   reasons: KickReason[];
 }
@@ -295,7 +297,7 @@ export const DEFAULT_KICK: KickSettings = {
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.', banScope: 'all', banDm: true,
   notifyPlayer: true, notifyText: '* Вы были кикнуты. Причина: {reason}',
-  warnLimit: 3, warnDays: 30, warnAction: 'kick', warnBanTime: '1d', rejoinBlockMin: 0,
+  warnLimit: 3, warnDays: 30, warnAction: 'kick', warnBanTime: '1d', ladder: [], rejoinBlockMin: 0,
   reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
 };
 

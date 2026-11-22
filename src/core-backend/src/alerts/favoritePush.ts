@@ -13,6 +13,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from '../db.js';
 import { log } from '../logger.js';
+import { serverActions } from './pushActions.js';
 import { pushToUser } from '../community/subscriptions.js';
 import { DEFAULT_FAV_PREFS, type FavEvent, type FavObs, type FavPrefs, type FavTrack, favText, mayPushFav, nextFavTrack, SUBSCRIPTION_KIND } from './favoritePushLogic.js';
 
@@ -51,7 +52,7 @@ export function notifyFavorites(serverId: number, kind: FavEvent, obs: FavObs, n
     const key = `${r.user_id}:${serverId}:${kind}`;
     if (!mayPushFav(kind, lastPush.get(key), now)) continue;
     lastPush.set(key, now);
-    pushToUser(r.user_id, { title: info.n, body, url: `/servers/${serverId}`, tag: `fav-${serverId}-${kind}` });
+    pushToUser(r.user_id, { title: info.n, body, url: `/servers/${serverId}`, tag: `fav-${serverId}-${kind}`, actions: serverActions(serverId) });
     n++;
   }
   if (lastPush.size > 20_000) for (const [k, t] of lastPush) if (now - t > 3_600_000) lastPush.delete(k);

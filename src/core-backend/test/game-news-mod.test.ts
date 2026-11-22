@@ -276,6 +276,23 @@ describe('what the limit of warnings does', () => {
   });
 });
 
+describe('the ladder of warnings', () => {
+  const Q = '76561198000000061';
+  const warn = (t: number) => kick.runMod(35, input({ action: 'warn', targetId: Q, name: 'Rude', reason: 'спам', adminId: `l${t}` }), NOW + t);
+
+  it('goes up a rung each time the count reaches it and keeps the warnings', () => {
+    scope.writeScoped('gamenews_kick', JSON.stringify({ ladder: [{ at: 2, action: 'kick', time: '1d' }, { at: 3, action: 'ban', time: '1d' }, { at: 4, action: 'ban', time: 'перм' }] }), 35);
+    assert.equal(warn(1).kick, false);
+    assert.equal(warn(2).kick, true); // a kick, no ban yet
+    assert.equal(kick.joinBlock(35, Q, NOW + 1000), null);
+    warn(3);
+    const day = kick.joinBlock(35, Q, NOW + 1000);
+    assert.equal(day?.ban.until, NOW + 3 + 86_400_000);
+    warn(4);
+    assert.equal(kick.joinBlock(35, Q, NOW + 2000)?.ban.until, 0); // for ever
+  });
+});
+
 describe('the block after a kick', () => {
   it('holds only on the server where the player was kicked', () => {
     const id = '76561198000000051';

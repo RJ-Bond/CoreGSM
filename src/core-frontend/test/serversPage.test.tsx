@@ -111,9 +111,12 @@ describe('Server page', () => {
     expect((await screen.findAllByText(LONG)).length).toBeGreaterThan(0);
   });
 
-  it('an unknown tab or a word instead of a number is the «not found» page, not a crash', () => {
+  it('an unknown tab or a word that is not a short name of a server is the «not found» page, not a crash', async () => {
     const { container } = render(withAuth(<ServersPage sub="abc" />, null));
     expect(container.textContent).not.toContain(LONG);
-    expect(container.textContent?.length).toBeGreaterThan(0);
+    // a word is first looked up as a short name of a server, then it is «not found»
+    await waitFor(() => expect(container.textContent?.length).toBeGreaterThan(0));
+    const tab = render(withAuth(<ServersPage sub="3/nothing" />, null));
+    expect(tab.container.textContent?.length).toBeGreaterThan(0);
   });
 });

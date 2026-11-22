@@ -337,6 +337,7 @@ export interface ServerRow {
   sort_order?: number | null;
   /** address shown to people (public IP or domain); '' = show host:port */
   display_address: string;
+  slug?: string;
   /** country shown in Discord (ISO 3166-1 alpha-2); '' = detected from the IP */
   country: string;
   name: string;

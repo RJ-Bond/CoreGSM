@@ -497,6 +497,38 @@ CREATE INDEX IF NOT EXISTS idx_server_changes ON server_changes(server_id, ts);`
     // how many players saw a message of the panel (the plugin reports it after it showed the message); NULL = not reported (an older plugin)
     up: (db) => addColumn(db, 'game_news_log', 'shown', 'INTEGER'),
   },
+  {
+    version: 36,
+    name: 'ban_threads',
+    // the conversation under an appeal and the notices «the ban ends soon / has ended» (one per ban and kind)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS ban_appeal_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  appeal_id INTEGER NOT NULL REFERENCES ban_appeals(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  side TEXT NOT NULL,
+  author TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ban_appeal_messages ON ban_appeal_messages(appeal_id, id);
+CREATE TABLE IF NOT EXISTS ban_notices (
+  platform_id TEXT NOT NULL,
+  until INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (platform_id, until, kind)
+);`),
+  },
+  {
+    version: 37,
+    name: 'server_slug',
+    // a short readable name of a server for links (/s/rust-main); empty = none; unique when set
+    up: (db) => {
+      addColumn(db, 'servers', 'slug', "TEXT NOT NULL DEFAULT ''");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_slug ON servers(slug) WHERE slug <> ''");
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

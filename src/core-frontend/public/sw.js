@@ -17,18 +17,23 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(fetch(e.request).catch(async () => (await caches.match(OFFLINE)) || Response.error()));
 });
 
-// a notification from the panel: { title, body, url, tag }
+// a notification from the panel: { title, body, url, tag, actions }
 self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data ? e.data.text() : '' }; }
   if (!m || typeof m !== 'object') m = {};
+  // up to two buttons: { action, title, url }; the browser shows them where it can, the click goes to the address of the pressed one
+  const buttons = Array.isArray(m.actions) ? m.actions.filter((a) => a && typeof a.action === 'string' && typeof a.title === 'string' && typeof a.url === 'string').slice(0, 2) : [];
+  const urls = {};
+  for (const a of buttons) urls[a.action] = a.url;
   e.waitUntil(self.registration.showNotification(String(m.title || 'CoreGSM'), {
     body: String(m.body || ''),
     icon: '/logo-192.png',
     badge: '/logo-128.png',
     tag: m.tag ? String(m.tag) : undefined,
     renotify: !!m.tag,
-    data: { url: typeof m.url === 'string' ? m.url : '/' },
+    actions: buttons.map((a) => ({ action: a.action, title: a.title })),
+    data: { url: typeof m.url === 'string' ? m.url : '/', urls },
   }));
 });
 
@@ -43,7 +48,9 @@ const safeUrl = (raw) => {
 // a click opens the page of the notification: an open tab of the panel is reused
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = safeUrl(e.notification.data && e.notification.data.url);
+  const d = e.notification.data || {};
+  // a pressed button has its own address; a press on the notification itself opens the main one
+  const url = safeUrl((e.action && d.urls && d.urls[e.action]) || d.url);
   e.waitUntil((async () => {
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of tabs) {

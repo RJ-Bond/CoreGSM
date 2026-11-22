@@ -497,24 +497,45 @@ export function KickCard({ initial }: { initial: KickSettings }) {
           </Field>
           <VarChips vars={[...varsAll, { name: 'n', example: '2' }, { name: 'limit', example: String(f.warnLimit) }]} onPick={(v) => set('warnTemplate', `${f.warnTemplate} ${v}`.trim())} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label={t('gn.kk.warnLimit')}>
+            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnLimit')}>
               <input className="input w-32" type="number" min={0} max={20} value={f.warnLimit} onChange={(e) => set('warnLimit', Number(e.target.value))} />
-            </Field>
+            </Field>}
             <Field label={t('gn.kk.warnDays')}>
               <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
             </Field>
-            <Field label={t('gn.kk.warnAction')}>
+            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnAction')}>
               <select className="input w-48" value={f.warnAction} onChange={(e) => set('warnAction', e.target.value === 'ban' ? 'ban' : 'kick')}>
                 <option value="kick">{t('gn.kk.warnActionKick')}</option>
                 <option value="ban">{t('gn.kk.warnActionBan')}</option>
               </select>
-            </Field>
-            {f.warnAction === 'ban' && (
+            </Field>}
+            {!(f.ladder ?? []).length && f.warnAction === 'ban' && (
               <Field label={t('gn.kk.warnBanTime')}>
                 <p className="mb-1 text-xs text-mute">{t('gn.kk.warnBanTimeHint')}</p>
                 <input className="input w-32 font-mono" value={f.warnBanTime} maxLength={12} onChange={(e) => set('warnBanTime', e.target.value)} />
               </Field>
             )}
+          </div>
+          <div className="space-y-2" data-testid="warn-ladder">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="font-extrabold">{t('gn.kk.ladder')}</h4>
+                <p className="text-sm font-semibold text-mute">{t('gn.kk.ladderNote')}</p>
+              </div>
+              <button type="button" className="btn btn-soft btn-sm" disabled={(f.ladder ?? []).length >= 6} onClick={() => set('ladder', [...(f.ladder ?? []), { at: Math.max(0, ...(f.ladder ?? []).map((x) => x.at)) + 1, action: 'kick', time: '1d' }])}>{t('gn.kk.ladderAdd')}</button>
+            </div>
+            {(f.ladder ?? []).map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-bold">{t('gn.kk.ladderAt')}</span>
+                <input className="input w-20" type="number" min={1} max={50} aria-label={t('gn.kk.ladderAt')} value={r.at} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, at: Number(e.target.value) } : x)))} />
+                <select className="input w-40" aria-label={t('gn.kk.warnAction')} value={r.action} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, action: e.target.value === 'ban' ? 'ban' : 'kick' } : x)))}>
+                  <option value="kick">{t('gn.kk.warnActionKick')}</option>
+                  <option value="ban">{t('gn.kk.warnActionBan')}</option>
+                </select>
+                {r.action === 'ban' && <input className="input w-28 font-mono" aria-label={t('gn.kk.warnBanTime')} value={r.time} maxLength={12} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, time: e.target.value } : x)))} />}
+                <button type="button" className="btn btn-ghost btn-sm" aria-label={t('common.remove')} onClick={() => set('ladder', (f.ladder ?? []).filter((_, j) => j !== i))}>{t('common.remove')}</button>
+              </div>
+            ))}
           </div>
         </WithPreview>
       )}

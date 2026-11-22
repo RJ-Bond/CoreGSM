@@ -16,6 +16,7 @@ import { publicBase } from '../admin/site.js';
 import { setPushHook } from '../community/subscriptions.js';
 import { DEFAULT_QUIET, inQuiet, type Quiet } from './quietLogic.js';
 import { sendPush, vapidKeys } from './webpush.js';
+import { cleanActions, type PushAction } from './pushActions.js';
 
 export const router = express.Router();
 
@@ -50,7 +51,7 @@ export function quietOf(userId: number): Quiet {
 const MAX_FAILS = 10;
 const subject = () => publicBase() ?? 'mailto:admin@coregsm.local';
 
-export interface PushMessage { title: string; body: string; url?: string; tag?: string }
+export interface PushMessage { title: string; body: string; url?: string; tag?: string; actions?: PushAction[] }
 
 /** sends to every device of a user; never throws (the poller calls it) */
 export async function pushToUser(userId: number, m: PushMessage): Promise<number> {
@@ -58,7 +59,7 @@ export async function pushToUser(userId: number, m: PushMessage): Promise<number
   const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[];
   let sent = 0;
   for (const s of subs) {
-    const r = await sendPush(s, { ...m }, subject());
+    const r = await sendPush(s, { ...m, actions: cleanActions(m.actions) }, subject());
     if (r === 'sent') {
       sent++;
       db.prepare('UPDATE push_subscriptions SET last_ok = ?, fails = 0 WHERE id = ?').run(Date.now(), s.id);

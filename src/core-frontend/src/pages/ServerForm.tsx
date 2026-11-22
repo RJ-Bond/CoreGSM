@@ -20,7 +20,7 @@ export function hostError(v: string): string {
   return '';
 }
 
-export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
+export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', slug: '', country: '' };
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
 export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onClose, onSaved }: { initial: ServerInput; id?: number; coverUrl?: string | null; onCoverChanged?: () => void; onClose: () => void; onSaved: () => void }) {
@@ -65,7 +65,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   const [test, setTest] = useState<TestResult | null>(null);
 
   // "advanced" is open when it already holds something (editing)
-  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country || coverUrl);
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.slug || initial.country || coverUrl);
 
   const profiles = useGameProfiles();
   // true once the user typed a port themselves: a game change must not overwrite it
@@ -210,6 +210,10 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
             <Field label={t('d2.sf.display')}>
               <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder={t('d2.sf.displayEx')} />
             </Field>
+            <Field label={t('d2.sf.slug')}>
+              <input id="srv-slug" className="input font-mono" value={f.slug ?? ''} onChange={(e) => change({ slug: e.target.value.trim().toLowerCase() })} maxLength={40} placeholder={t('d2.sf.slugEx')} />
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">{f.slug ? t('d2.sf.slugLink', { link: `${window.location.origin}/s/${f.slug}` }) : t('d2.sf.slugHint')}</p>
             <Field label={t('d2.sf.country')}>
               <select id="srv-country" className="input" value={f.country} onChange={(e) => change({ country: e.target.value })}>
                 <option value="">{t('d2.sf.countryAuto')}</option>

@@ -30,6 +30,7 @@ export function serialize(r: ServerJoin) {
     port: r.port,
     queryPort: r.query_port,
     displayAddress: r.display_address,
+    slug: r.slug ?? '',
     country: r.country ?? '',
     coverUrl: coverUrl(r.id),
     // the address shown in the panel and on cards

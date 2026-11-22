@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { type AuthedRequest, rateLimit, staff, viewer, isStaff } from '../security/auth.js';
 import { activeBanByNick, holdsOn, listBans, logMod, removeBan, type BanRow } from './gameNewsModLog.js';
 import { bus } from '../events.js';
+import { registerBanThreads } from './banThreads.js';
 import { pushLater } from '../alerts/push.js';
 import { serverLabel } from './gameNewsVars.js';
 import type { BanHistoryItem, BansData as BansAnswer, PublicBan } from '../shared/bans.js';
@@ -96,6 +97,7 @@ function alertUsers(): number[] {
 }
 
 export function registerBanExtras(app: Express): void {
+  registerBanThreads(app);
   app.get('/api/bans/history', viewer, (req: Request, res) => {
     const serverQ = Number(req.query.server);
     const items = banHistory({ staff: isStaff(req), now: Date.now(), server: Number.isInteger(serverQ) && serverQ > 0 ? serverQ : undefined });

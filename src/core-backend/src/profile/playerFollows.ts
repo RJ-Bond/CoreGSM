@@ -15,6 +15,7 @@ import { db, EFFECTIVE_NAME } from '../db.js';
 import { queueCard } from '../alerts/dmQueue.js';
 import { followCard } from '../alerts/dmCard.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
+import { serverActions } from '../alerts/pushActions.js';
 import { log } from '../logger.js';
 
 export const MAX_FOLLOWS = 30;
@@ -72,7 +73,7 @@ export function notifyFollowers(serverId: number, names: string[], now = Date.no
       insert.run(f.user_id, now, 'player_online', serverId, text);
       touch.run(now, f.user_id, f.nick_key);
       if (f.discord_id && dmAvailable()) queueCard({ userId: f.user_id, discordId: f.discord_id, kind: 'follow', serverId, card: (c) => followCard(c, { nick: shown.get(f.nick_key) ?? f.nick_key, server: info.n, address, serverId, ts: now }) }, now);
-      pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}` });
+      pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}`, actions: serverActions(serverId) });
       n++;
     }
     return n;

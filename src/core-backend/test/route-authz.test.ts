@@ -91,6 +91,7 @@ const OPEN: Record<string, string> = {
   'GET /api/news/images/:name': 'pictures of published news',
   'GET /n/:id': 'a public news page for link previews',
   'GET /s/:id': 'a public server page for link previews',
+  'GET /s/:name': 'a short name of a server: redirects to the public page for link previews',
 };
 
 describe('every route has a guard or a reason to be open', () => {

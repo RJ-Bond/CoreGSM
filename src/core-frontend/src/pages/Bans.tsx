@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import LiveBadge from '../components/LiveBadge';
@@ -7,6 +7,7 @@ import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast
 import { useAuth } from '../auth';
 import { Switch } from '../components/Switch';
 import ArtPic from '../components/ArtPic';
+import AppealThread from '../components/AppealThread';
 import type { Appeal, BanHistoryItem, BansData, PublicBan } from '../shared/bans';
 import '../styles/bans.css';
 
@@ -139,13 +140,45 @@ function AppealForm() {
   );
 }
 
+/** the appeals of the signed-in person with the conversation under each */
+function MyAppeals() {
+  useI18n();
+  const [list, setList] = useState<{ id: number; at: number; nick: string; status: string; messages: number }[]>([]);
+  const [openId, setOpenId] = useState<number | null>(null);
+  useEffect(() => { api<typeof list>('/bans/appeals/mine').then(setList).catch(() => undefined); }, []);
+  if (list.length === 0) return null;
+  return (
+    <section className="bn-appeal" aria-label={t('bans.mine.title')}>
+      <h3 className="bn-appeal-head"><b>{t('bans.mine.title')}</b></h3>
+      <ul className="bn-list">
+        {list.map((a) => (
+          <li key={a.id} className={`bn-row bn-appeal-row is-${a.status}`}>
+            <div className="bn-main">
+              <div className="bn-head"><b className="bn-nick">{a.nick}</b><time className="bn-when" dateTime={new Date(a.at).toISOString()} title={fmtDateTime(a.at)}>{ago(a.at)}</time></div>
+              <div className="bn-meta">
+                <span className={`pill ${a.status === 'accepted' ? 'pill-ok' : a.status === 'rejected' ? 'pill-mute' : 'pill-warn'}`}>{a.status === 'accepted' ? t('bans.appeal.accepted') : a.status === 'rejected' ? t('bans.appeal.rejected') : t('bans.mine.open')}</span>
+                <button type="button" className="bn-chip bn-thread-btn" aria-expanded={openId === a.id} onClick={() => setOpenId(openId === a.id ? null : a.id)}>{t('bans.thread.open')}{a.messages ? ` · ${a.messages}` : ''}</button>
+              </div>
+              {openId === a.id && <AppealThread id={a.id} />}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 const fetchAppeals = () => api<Appeal[]>('/bans/appeals');
 
 /** the staff: the appeals; a decision, with the ban lifted at once if asked */
 function AppealsPanel({ onChanged }: { onChanged: () => void }) {
   useI18n();
   const [list, setList] = useState<Appeal[] | null>(null);
+  const [counts, setCounts] = useState<Record<string, { messages: number; fromPlayer: number }>>({});
+  const [openId, setOpenId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const loadCounts = useCallback(() => api<Record<string, { messages: number; fromPlayer: number }>>('/bans/appeals-counts').then(setCounts).catch(() => undefined), []);
+  useEffect(() => { void loadCounts(); }, [loadCounts]);
   const load = () => fetchAppeals().then(setList).catch((e: Error) => setError(e.message));
   useEffect(() => {
     let off = false;
@@ -181,7 +214,11 @@ function AppealsPanel({ onChanged }: { onChanged: () => void }) {
               <div className="bn-meta">
                 {a.contact && <span className="bn-chip">{t('bans.appeal.contactOf', { c: a.contact })}</span>}
                 {a.decidedBy && <span className="bn-chip">{t('bans.appeal.by', { name: a.decidedBy })}</span>}
+                <button type="button" className="bn-chip bn-thread-btn" aria-expanded={openId === a.id} onClick={() => setOpenId(openId === a.id ? null : a.id)}>
+                  {t('bans.thread.open')}{counts[a.id] ? ` · ${counts[a.id].messages}` : ''}
+                </button>
               </div>
+              {openId === a.id && <AppealThread id={a.id} onSent={() => void loadCounts()} />}
             </div>
             <div className="bn-state">
               {a.status === 'open' ? (
@@ -285,6 +322,7 @@ export function BansView({ serverId = 0, onLoaded }: { serverId?: number; onLoad
                 </ul>
               )}
               {!serverId && <AppealForm />}
+              {!serverId && !staff && me && <MyAppeals />}
             </>
           )}
           {tab === 'history' && (

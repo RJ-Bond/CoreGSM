@@ -19,6 +19,7 @@ import { downtimeByDay, incidentsSince } from '../alerts/incidents.js';
 import { completeOrder } from '../monitoring/serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
+import { SLUG_RE, slugProblem } from './serverSlug.js';
 import { publicNotes } from '../alerts/statusNotes.js';
 import { buildAtom, incidentEntry, type FeedEntry } from '../alerts/statusFeedLogic.js';
 
@@ -52,7 +53,19 @@ const serverSchema = z.object({
     .optional(),
   // two-letter country code shown in the Discord message; empty = detect from the address
   country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
+  // a short readable name for links: rust-main (empty = none)
+  slug: z.string().trim().toLowerCase().max(40).optional(),
 });
+
+/** a slug that is not good or is taken by another server; an empty one is fine (none) */
+function slugError(slug: string, selfId: number): { status: number; error: string } | null {
+  if (!slug) return null;
+  const p = slugProblem(slug);
+  if (p === 'format') return { status: 400, error: 'Короткое имя: латиница, цифры и дефисы, от 2 до 40 знаков' };
+  if (p === 'number') return { status: 400, error: 'Короткое имя не может состоять только из цифр' };
+  const taken = db.prepare('SELECT id FROM servers WHERE slug = ? AND id <> ?').get(slug, selfId);
+  return taken ? { status: 409, error: 'Это короткое имя уже занято другим сервером' } : null;
+}
 
 // live updates: a signal, not data (see live.ts)
 router.get('/api/live', viewer, liveHandler);
@@ -95,14 +108,24 @@ router.post(
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+    const bad = slugError(b.data.slug ?? '', 0);
+    if (bad) return res.status(bad.status).json({ error: bad.error });
     const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), Date.now());
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, slug, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), b.data.slug ?? '', Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
   }),
 );
+
+// a readable name to the number of the server: the page opens /servers/rust-main by this
+router.get('/api/servers/by-slug/:slug', viewer, (req, res) => {
+  const slug = String(req.params.slug ?? '').toLowerCase();
+  const row = SLUG_RE.test(slug) ? (db.prepare('SELECT id FROM servers WHERE slug = ?').get(slug) as { id: number } | undefined) : undefined;
+  if (!row) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json({ id: row.id });
+});
 
 // the manual order of the servers (up/down in the admin table); registered before /api/servers/:id
 router.put('/api/servers/order', allow('servers'), (req, res) => {
@@ -122,9 +145,11 @@ router.put(
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+    const bad = slugError(b.data.slug ?? '', id);
+    if (bad) return res.status(bad.status).json({ error: bad.error });
     const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), id);
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=?, slug=CASE WHEN ? = 1 THEN ? ELSE slug END WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), b.data.slug === undefined ? 0 : 1, b.data.slug ?? '', id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -338,6 +363,15 @@ const esc = (v: unknown) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+// /s/rust-main goes to /s/3 (the same card for the link preview)
+router.get('/s/:name', (req, res, next) => {
+  const name = String(req.params.name ?? '');
+  if (/^\d+$/.test(name) || !SLUG_RE.test(name.toLowerCase())) return next();
+  const row = db.prepare('SELECT id FROM servers WHERE slug = ?').get(name.toLowerCase()) as { id: number } | undefined;
+  if (!row) return next();
+  res.redirect(302, `/s/${row.id}`);
+});
 
 router.get('/s/:id', param('id'), (req, res) => {
   res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });

@@ -29,12 +29,29 @@ import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
 
+/** /servers/rust-main: finds the number of the server by its short name and opens the usual address */
+function SlugGate({ slug, tab }: { slug: string; tab: string }) {
+  useI18n();
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    let off = false;
+    api<{ id: number }>(`/servers/by-slug/${encodeURIComponent(slug)}`)
+      .then((r) => { if (off) return; if (Number.isInteger(r?.id) && r.id > 0) navigate(`/servers/${r.id}${tab ? `/${tab}` : ''}`, { replace: true }); else setMissing(true); })
+      .catch(() => { if (!off) setMissing(true); });
+    return () => { off = true; };
+  }, [slug, tab]);
+  if (missing) return <NotFound kind="server" />;
+  return <div className="skeleton h-40" aria-busy="true" />;
+}
+
 export default function ServersPage({ sub }: { sub: string }) {
   // "12/players" -> server 12, tab "players"
   const [idPart = '', tabPart = ''] = sub.split('/');
   const id = Number(idPart);
   const tab = (SERVER_TABS as readonly string[]).includes(tabPart) ? tabPart : '';
   if (idPart && /^\d+$/.test(idPart) && Number.isInteger(id) && id > 0 && (!tabPart || tab)) return <ServerDetail id={id} tab={tab} />;
+  // "/servers/rust-main": a short name of a server
+  if (idPart && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(idPart) && !/^\d+$/.test(idPart) && (!tabPart || tab)) return <SlugGate slug={idPart} tab={tab} />;
   // "/servers/abc" or an unknown tab: not a server page
   if (sub) return <NotFound kind="server" />;
   return <ServerList />;

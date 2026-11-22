@@ -16,9 +16,10 @@ import { db, EFFECTIVE_NAME } from '../db.js';
 import { addColumn } from '../schema.js';
 import { queueCard, queueServerAlert } from '../alerts/dmQueue.js';
 import { serverCard } from '../alerts/dmCard.js';
+import { serverActions, type PushAction } from '../alerts/pushActions.js';
 
 /** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
-type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
+type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string; actions?: PushAction[] }) => void;
 let pushLater: PushHook = () => undefined;
 export const setPushHook = (fn: PushHook) => { pushLater = fn; };
 /** for the other notifiers (player follows): a push to the devices of one user */
@@ -132,7 +133,7 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     touch.run(now, s.user_id, serverId, kind);
     if (s.discord_id && canDm()) queueServerAlert({ userId: s.user_id, discordId: s.discord_id, data: { serverId, name: info.n, address }, event: { kind, ts: now, players: obs.players, max: obs.maxPlayers } }, now);
     // and on the devices where the player turned notifications on
-    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
+    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}`, actions: serverActions(serverId) });
     n++;
   }
   if (n) db.prepare('DELETE FROM user_notifications WHERE ts < ?').run(now - 60 * 86400_000);

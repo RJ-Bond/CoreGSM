@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="242c69b1de35"
+COREGSM_BUILD="40081bd90c12"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.74"
+COREGSM_VERSION="1.2.75"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -19895,6 +19895,7 @@ import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { db, EFFECTIVE_NAME } from '../db.js';
 import { log } from '../logger.js';
+import { serverActions } from './pushActions.js';
 import { pushToUser } from '../community/subscriptions.js';
 import { DEFAULT_FAV_PREFS, type FavEvent, type FavObs, type FavPrefs, type FavTrack, favText, mayPushFav, nextFavTrack, SUBSCRIPTION_KIND } from './favoritePushLogic.js';
 
@@ -19933,7 +19934,7 @@ export function notifyFavorites(serverId: number, kind: FavEvent, obs: FavObs, n
     const key = `${r.user_id}:${serverId}:${kind}`;
     if (!mayPushFav(kind, lastPush.get(key), now)) continue;
     lastPush.set(key, now);
-    pushToUser(r.user_id, { title: info.n, body, url: `/servers/${serverId}`, tag: `fav-${serverId}-${kind}` });
+    pushToUser(r.user_id, { title: info.n, body, url: `/servers/${serverId}`, tag: `fav-${serverId}-${kind}`, actions: serverActions(serverId) });
     n++;
   }
   if (lastPush.size > 20_000) for (const [k, t] of lastPush) if (now - t > 3_600_000) lastPush.delete(k);
@@ -20307,6 +20308,7 @@ import { publicBase } from '../admin/site.js';
 import { setPushHook } from '../community/subscriptions.js';
 import { DEFAULT_QUIET, inQuiet, type Quiet } from './quietLogic.js';
 import { sendPush, vapidKeys } from './webpush.js';
+import { cleanActions, type PushAction } from './pushActions.js';
 
 export const router = express.Router();
 
@@ -20341,7 +20343,7 @@ export function quietOf(userId: number): Quiet {
 const MAX_FAILS = 10;
 const subject = () => publicBase() ?? 'mailto:admin@coregsm.local';
 
-export interface PushMessage { title: string; body: string; url?: string; tag?: string }
+export interface PushMessage { title: string; body: string; url?: string; tag?: string; actions?: PushAction[] }
 
 /** sends to every device of a user; never throws (the poller calls it) */
 export async function pushToUser(userId: number, m: PushMessage): Promise<number> {
@@ -20349,7 +20351,7 @@ export async function pushToUser(userId: number, m: PushMessage): Promise<number
   const subs = db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[];
   let sent = 0;
   for (const s of subs) {
-    const r = await sendPush(s, { ...m }, subject());
+    const r = await sendPush(s, { ...m, actions: cleanActions(m.actions) }, subject());
     if (r === 'sent') {
       sent++;
       db.prepare('UPDATE push_subscriptions SET last_ok = ?, fails = 0 WHERE id = ?').run(Date.now(), s.id);
@@ -20406,6 +20408,38 @@ router.put('/api/push/quiet', auth, rateLimit(30), (req: AuthedRequest, res) => 
   ).run(req.user!.id, b.data.enabled ? 1 : 0, b.data.fromMin, b.data.toMin, b.data.tz);
   res.json(quietOf(req.user!.id));
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/alerts"
+  cat > "$APP_DIR/core-backend/src/alerts/pushActions.ts" << '__COREGSM_EOF__'
+/** Buttons under a push notification («Открыть», «Играть»): the service worker opens the address of the pressed one. */
+
+export interface PushAction { action: string; title: string; url: string }
+
+/** at most two buttons (some systems show no more), an id of letters, a short title, an address on the panel itself */
+export function cleanActions(raw: unknown): PushAction[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PushAction[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue;
+    const x = r as Record<string, unknown>;
+    const action = typeof x.action === 'string' ? x.action : '';
+    const title = typeof x.title === 'string' ? x.title.trim().slice(0, 24) : '';
+    const url = typeof x.url === 'string' ? x.url : '';
+    if (!/^[a-z]{1,12}$/.test(action) || !title) continue;
+    // an address of the panel: «/servers/3», never «//host» or another scheme
+    if (!url.startsWith('/') || url.startsWith('//') || url.includes('\\')) continue;
+    if (out.some((a) => a.action === action)) continue;
+    out.push({ action, title, url: url.slice(0, 300) });
+    if (out.length === 2) break;
+  }
+  return out;
+}
+
+/** the two buttons of a notification about a server: its page, and the tab with the way to connect */
+export const serverActions = (serverId: number): PushAction[] => [
+  { action: 'open', title: 'Открыть', url: `/servers/${serverId}` },
+  { action: 'play', title: 'Играть', url: `/servers/${serverId}/connect` },
+];
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/alerts"
   cat > "$APP_DIR/core-backend/src/alerts/quietLogic.ts" << '__COREGSM_EOF__'
@@ -22214,9 +22248,10 @@ import { db, EFFECTIVE_NAME } from '../db.js';
 import { addColumn } from '../schema.js';
 import { queueCard, queueServerAlert } from '../alerts/dmQueue.js';
 import { serverCard } from '../alerts/dmCard.js';
+import { serverActions, type PushAction } from '../alerts/pushActions.js';
 
 /** device notifications (push.ts plugs itself in, so this module stays free of the web layer) */
-type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string }) => void;
+type PushHook = (userId: number, m: { title: string; body: string; url?: string; tag?: string; actions?: PushAction[] }) => void;
 let pushLater: PushHook = () => undefined;
 export const setPushHook = (fn: PushHook) => { pushLater = fn; };
 /** for the other notifiers (player follows): a push to the devices of one user */
@@ -22330,7 +22365,7 @@ export function notifySubscribers(serverId: number, kind: SubKind, obs: Observat
     touch.run(now, s.user_id, serverId, kind);
     if (s.discord_id && canDm()) queueServerAlert({ userId: s.user_id, discordId: s.discord_id, data: { serverId, name: info.n, address }, event: { kind, ts: now, players: obs.players, max: obs.maxPlayers } }, now);
     // and on the devices where the player turned notifications on
-    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}` });
+    pushLater(s.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `srv-${serverId}-${kind}`, actions: serverActions(serverId) });
     n++;
   }
   if (n) db.prepare('DELETE FROM user_notifications WHERE ts < ?').run(now - 60 * 86400_000);
@@ -23016,6 +23051,7 @@ export interface ServerRow {
   sort_order?: number | null;
   /** address shown to people (public IP or domain); '' = show host:port */
   display_address: string;
+  slug?: string;
   /** country shown in Discord (ISO 3166-1 alpha-2); '' = detected from the IP */
   country: string;
   name: string;
@@ -23914,6 +23950,12 @@ export const ERRORS = {
   game_account_unknown: 'Игровой аккаунт игрока панели неизвестен: выдайте бан в игре командой .ban',
   appeal_exists: 'Заявка на этот ник уже отправлена и ждёт ответа',
   appeal_not_found: 'Заявка на разбан не найдена',
+  appeal_message_bad: 'Напишите сообщение (до 1000 знаков)',
+  appeal_decided: 'По этой заявке решение уже принято',
+  appeal_thread_full: 'В переписке слишком много сообщений',
+  slug_format: 'Короткое имя: латиница, цифры и дефисы, от 2 до 40 знаков',
+  slug_number: 'Короткое имя не может состоять только из цифр',
+  slug_taken: 'Это короткое имя уже занято другим сервером',
   too_many_attempts: 'Слишком много попыток. Подождите 10 минут.',
   bad_data: 'Неверные данные',
   bad_data_lower: 'неверные данные',
@@ -24332,6 +24374,131 @@ declare module 'gamedig' {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/banThreads.ts" << '__COREGSM_EOF__'
+/**
+ * Two things around a ban that the player can feel:
+ *  - the conversation under an appeal: the staff may ask a question, the signed-in author answers (the appeal stays open meanwhile);
+ *  - the notice that a ban ends soon and that it has ended (to the account the game identity is linked to).
+ */
+import type { Express } from 'express';
+import { z } from 'zod';
+import { type AuthedRequest, auth, isStaff, rateLimit, staff } from '../security/auth.js';
+import { db } from '../db.js';
+import { pushLater } from '../alerts/push.js';
+import { enqueueDelivery } from '../alerts/deliveries.js';
+
+export const SOON_MS = 24 * 3_600_000;
+const MAX_MESSAGES = 200;
+
+interface Appeal { id: number; nick: string; status: string; user_id: number | null; platform_id: string }
+interface Msg { id: number; appeal_id: number; ts: number; side: 'staff' | 'player'; author: string; text: string }
+
+const staffToPush = (): number[] =>
+  (db.prepare("SELECT a.user_id AS id FROM ban_alerts a JOIN users u ON u.id = a.user_id WHERE u.status = 'active' AND u.role IN ('admin', 'moderator')").all() as { id: number }[]).map((r) => r.id);
+
+const msgOut = (m: Msg) => ({ id: m.id, at: m.ts, side: m.side, author: m.author, text: m.text });
+
+function notifyUser(userId: number, kind: string, text: string, url: string, tag: string, now: number): void {
+  db.prepare('INSERT INTO user_notifications (user_id, ts, kind, server_id, text, url) VALUES (?, ?, ?, NULL, ?, ?)').run(userId, now, kind, text, url);
+  pushLater(userId, { title: 'Бан', body: text, url, tag });
+}
+
+export function registerBanThreads(app: Express): void {
+  /** an appeal and who may read it: the staff, and the signed-in person who sent it */
+  const open = (req: AuthedRequest, id: number): { appeal: Appeal; asStaff: boolean } | null => {
+    const appeal = db.prepare('SELECT id, nick, status, user_id, platform_id FROM ban_appeals WHERE id = ?').get(id) as Appeal | undefined;
+    if (!appeal) return null;
+    const asStaff = isStaff(req);
+    if (!asStaff && !(req.user && appeal.user_id === req.user.id)) return null;
+    return { appeal, asStaff };
+  };
+
+  // the appeals of the signed-in person with the number of messages: the «Баны» page shows the conversation under them
+  app.get('/api/bans/appeals/mine', auth, (req: AuthedRequest, res) => {
+    const rows = db.prepare(
+      `SELECT a.id, a.ts, a.nick, a.status, a.note, (SELECT COUNT(*) FROM ban_appeal_messages m WHERE m.appeal_id = a.id) AS messages
+       FROM ban_appeals a WHERE a.user_id = ? ORDER BY a.ts DESC LIMIT 20`,
+    ).all(req.user!.id) as { id: number; ts: number; nick: string; status: string; note: string; messages: number }[];
+    res.json(rows.map((r) => ({ id: r.id, at: r.ts, nick: r.nick, status: r.status, note: r.note, messages: r.messages })));
+  });
+
+  app.get('/api/bans/appeals/:id/messages', auth, (req: AuthedRequest, res) => {
+    const o = open(req, Number(req.params.id));
+    if (!o) return res.status(404).json({ error: 'Заявка не найдена' });
+    const rows = db.prepare('SELECT * FROM ban_appeal_messages WHERE appeal_id = ? ORDER BY id LIMIT ?').all(o.appeal.id, MAX_MESSAGES) as Msg[];
+    res.json({ appeal: { id: o.appeal.id, nick: o.appeal.nick, status: o.appeal.status, canReply: o.appeal.status === 'open' && (o.asStaff || o.appeal.user_id !== null) }, messages: rows.map(msgOut) });
+  });
+
+  app.post('/api/bans/appeals/:id/messages', auth, rateLimit(30), (req: AuthedRequest, res) => {
+    const b = z.object({ text: z.string().trim().min(1).max(1000) }).safeParse(req.body);
+    if (!b.success) return res.status(400).json({ error: 'Напишите сообщение (до 1000 знаков)' });
+    const o = open(req, Number(req.params.id));
+    if (!o) return res.status(404).json({ error: 'Заявка не найдена' });
+    if (o.appeal.status !== 'open') return res.status(409).json({ error: 'По этой заявке решение уже принято' });
+    const n = (db.prepare('SELECT COUNT(*) AS n FROM ban_appeal_messages WHERE appeal_id = ?').get(o.appeal.id) as { n: number }).n;
+    if (n >= MAX_MESSAGES) return res.status(409).json({ error: 'В переписке слишком много сообщений' });
+    const now = Date.now();
+    const side = o.asStaff ? 'staff' : 'player';
+    const info = db.prepare('INSERT INTO ban_appeal_messages (appeal_id, ts, side, author, text) VALUES (?, ?, ?, ?, ?)').run(o.appeal.id, now, side, req.user!.username, b.data.text);
+    if (side === 'staff') {
+      if (o.appeal.user_id) notifyUser(o.appeal.user_id, 'ban_appeal', `Модератор ответил по заявке на разбан: ${b.data.text.slice(0, 120)}`, '/bans', `ban-appeal-${o.appeal.id}`, now);
+    } else {
+      for (const id of staffToPush()) pushLater(id, { title: `Ответ по заявке: ${o.appeal.nick}`, body: b.data.text.slice(0, 120), url: '/admin/gamenews/players', tag: `ban-appeal-${o.appeal.id}` });
+    }
+    res.status(201).json({ id: Number(info.lastInsertRowid) });
+  });
+
+  // the staff list of appeals gets a counter of messages through this
+  app.get('/api/bans/appeals-counts', staff, (_req, res) => {
+    const rows = db.prepare("SELECT appeal_id AS id, COUNT(*) AS n, MAX(ts) AS last, SUM(side = 'player') AS fromPlayer FROM ban_appeal_messages GROUP BY appeal_id").all() as { id: number; n: number; last: number; fromPlayer: number }[];
+    res.json(Object.fromEntries(rows.map((r) => [r.id, { messages: r.n, last: r.last, fromPlayer: r.fromPlayer }])));
+  });
+}
+
+// ---- the notice that a ban ends
+
+interface EndingBan { platform_id: string; nick: string; until: number }
+
+/** who is told about a ban of this game account: the account it is linked to (bell, push, a private message in Discord) */
+function recipients(platformId: string): { userId: number; discordId: string | null }[] {
+  if (!platformId || platformId === '0') return [];
+  return db.prepare("SELECT u.id AS userId, u.discord_id AS discordId FROM game_identities g JOIN users u ON u.id = g.user_id WHERE g.platform_id = ? AND u.status = 'active'").all(platformId) as { userId: number; discordId: string | null }[];
+}
+
+const told = (platformId: string, until: number, kind: string): boolean => !!db.prepare('SELECT 1 FROM ban_notices WHERE platform_id = ? AND until = ? AND kind = ?').get(platformId, until, kind);
+const mark = (platformId: string, until: number, kind: string, now: number): void => { db.prepare('INSERT OR IGNORE INTO ban_notices (platform_id, until, kind, ts) VALUES (?, ?, ?, ?)').run(platformId, until, kind, now); };
+
+function say(r: { userId: number; discordId: string | null }, title: string, text: string, tag: string, now: number): void {
+  notifyUser(r.userId, 'ban_end', text, '/bans', tag, now);
+  if (r.discordId) {
+    try { enqueueDelivery({ kind: 'dm', refId: null, target: r.discordId, payload: { embed: { title, description: text, color: 0xf5b01e, footer: { text: 'CoreGSM' }, timestamp: new Date(now).toISOString() }, actions: [], buttons: [], summary: title } }); } catch { /* the bell is enough */ }
+  }
+}
+
+/** a ban that ends within a day is announced once; a ban that has ended after that notice is announced once too. Called by the scheduler. */
+export function checkBanEnds(now = Date.now()): number {
+  let sent = 0;
+  const soon = db.prepare("SELECT platform_id, nick, until FROM game_bans WHERE kind = 'ban' AND until > ? AND until <= ?").all(now, now + SOON_MS) as EndingBan[];
+  for (const b of soon) {
+    if (told(b.platform_id, b.until, 'soon')) continue;
+    mark(b.platform_id, b.until, 'soon', now);
+    for (const r of recipients(b.platform_id)) { say(r, '⏳ Бан скоро закончится', `Бан ${b.nick} закончится ${new Date(b.until).toLocaleString('ru-RU')}.`, `ban-soon-${b.platform_id}`, now); sent++; }
+  }
+  // the ones announced earlier and over now (the ban may be already deleted: the notice keeps what is needed)
+  const over = db.prepare("SELECT n.platform_id, n.until FROM ban_notices n WHERE n.kind = 'soon' AND n.until <= ? AND NOT EXISTS (SELECT 1 FROM ban_notices e WHERE e.platform_id = n.platform_id AND e.until = n.until AND e.kind = 'ended')").all(now) as { platform_id: string; until: number }[];
+  for (const b of over) {
+    mark(b.platform_id, b.until, 'ended', now);
+    // a ban that was lifted earlier or replaced by a longer one is not «ended»
+    const still = db.prepare("SELECT until FROM game_bans WHERE platform_id = ? AND kind = 'ban'").get(b.platform_id) as { until: number } | undefined;
+    if (still && (still.until === 0 || still.until > now)) continue;
+    const nick = (db.prepare('SELECT nick FROM game_mod_log WHERE platform_id = ? ORDER BY id DESC LIMIT 1').get(b.platform_id) as { nick: string } | undefined)?.nick ?? '';
+    for (const r of recipients(b.platform_id)) { say(r, '✅ Бан закончился', `Срок бана${nick ? ` ${nick}` : ''} истёк, можно заходить на сервер.`, `ban-end-${b.platform_id}`, now); sent++; }
+  }
+  db.prepare('DELETE FROM ban_notices WHERE ts < ?').run(now - 30 * 86_400_000);
+  return sent;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
   cat > "$APP_DIR/core-backend/src/gamenews/bansPublic.ts" << '__COREGSM_EOF__'
 /**
  * The «Баны» page: the bans that the game plugin has put in force, as a list for the panel.
@@ -24344,6 +24511,7 @@ import { z } from 'zod';
 import { type AuthedRequest, rateLimit, staff, viewer, isStaff } from '../security/auth.js';
 import { activeBanByNick, holdsOn, listBans, logMod, removeBan, type BanRow } from './gameNewsModLog.js';
 import { bus } from '../events.js';
+import { registerBanThreads } from './banThreads.js';
 import { pushLater } from '../alerts/push.js';
 import { serverLabel } from './gameNewsVars.js';
 import type { BanHistoryItem, BansData as BansAnswer, PublicBan } from '../shared/bans.js';
@@ -24431,6 +24599,7 @@ function alertUsers(): number[] {
 }
 
 export function registerBanExtras(app: Express): void {
+  registerBanThreads(app);
   app.get('/api/bans/history', viewer, (req: Request, res) => {
     const serverQ = Number(req.query.server);
     const items = banHistory({ staff: isStaff(req), now: Date.now(), server: Number.isInteger(serverQ) && serverQ > 0 ? serverQ : undefined });
@@ -25990,6 +26159,7 @@ import { pluginTarget } from './gameNews.js';
 import { postKickToDiscord } from './gameNewsChat.js';
 import { isHexColor, plainLine } from './gameNewsJoinLeave.js';
 import { tag, type Accent } from './gameNewsStyle.js';
+import { cleanLadder, pickStep, type LadderStep } from './warnLadder.js';
 import {
   activeBan, holdsOn, commandState, countMod, lastMod, finishCommand, findBanByNick, formatSpan, listBans, logMod, parseBanTime, putBan, queueCommand, recentMod,
   removeBan, topPlayers, type BanRow,
@@ -26051,6 +26221,8 @@ export interface KickSettings {
   warnAction: 'kick' | 'ban';
   /** the time of that ban: «1d», «7d», «перм» */
   warnBanTime: string;
+  /** the ladder of warnings (empty = only the single limit above) */
+  ladder: LadderStep[];
   /** minutes after a kick during which the player cannot come back (0 = he can) */
   rejoinBlockMin: number;
   /** short names for reasons: «.kick Ник 1» means the text of reason «1» */
@@ -26086,6 +26258,7 @@ export const DEFAULT_KICK: KickSettings = {
   warnDays: 30,
   warnAction: 'kick',
   warnBanTime: '1d',
+  ladder: [],
   rejoinBlockMin: 0,
   reasons: [
     { key: '1', text: 'Спам' },
@@ -26136,6 +26309,7 @@ export function getKick(serverId?: number): KickSettings {
       warnDays: num(v.warnDays, d.warnDays, 1, 365),
       warnAction: v.warnAction === 'ban' ? 'ban' : 'kick',
       warnBanTime: typeof v.warnBanTime === 'string' && v.warnBanTime.trim() ? v.warnBanTime.trim().slice(0, 12) : d.warnBanTime,
+      ladder: cleanLadder(v.ladder),
       rejoinBlockMin: num(v.rejoinBlockMin, d.rejoinBlockMin, 0, 1440),
       reasons,
     };
@@ -26336,27 +26510,29 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
   logMod({ ...base, kind: 'warn' }, now);
   // a ban starts the count anew: warnings given before the last ban do not count
   const lastBan = b.targetId && b.targetId !== '0' ? lastMod(b.targetId, 'ban') : 0;
-  const since = Math.max(now - s.warnDays * 86_400_000, lastBan + 1);
+  const since = s.ladder.length ? now - s.warnDays * 86_400_000 : Math.max(now - s.warnDays * 86_400_000, lastBan + 1);
   const n = b.targetId && b.targetId !== '0' ? countMod(b.targetId, 'warn', since) : 1;
-  const escalate = s.warnLimit > 0 && n >= s.warnLimit;
-  try { postKickToDiscord(serverId, s.warnTemplate.replace(/\{n\}/g, String(n)).replace(/\{limit\}/g, String(s.warnLimit)), { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the warning */ }
-  logToDiscord(s, serverId, '⚠️ Предупреждение игроку', 0xf5b01e, { name: b.name, admin: b.adminName, reason, extra: [{ name: 'Предупреждений', value: `${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}` }] }, now);
-  const warnLine = s.announce ? modLine(s, s.warnTemplate, { name: b.name, reason, admin: b.adminName, n, limit: s.warnLimit }) : '';
+  const pick = pickStep(s, n);
+  const limit = pick.limit;
+  const escalate = pick.step !== null;
+  try { postKickToDiscord(serverId, s.warnTemplate.replace(/\{n\}/g, String(n)).replace(/\{limit\}/g, String(limit)), { name: b.name, reason, admin: b.adminName }, now); } catch { /* Discord is not needed for the warning */ }
+  logToDiscord(s, serverId, '⚠️ Предупреждение игроку', 0xf5b01e, { name: b.name, admin: b.adminName, reason, extra: [{ name: 'Предупреждений', value: `${n}${limit ? ` из ${limit}` : ''}` }] }, now);
+  const warnLine = s.announce ? modLine(s, s.warnTemplate, { name: b.name, reason, admin: b.adminName, n, limit: limit }) : '';
   if (!escalate) {
     return {
       ok: true, kick: false, line: warnLine,
-      notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: s.warnLimit }),
-      replies: s.announce ? [] : [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${s.warnLimit ? ` из ${s.warnLimit}` : ''}).`, [b.name])],
+      notice: notice('* Вам вынесено предупреждение ({n} из {limit}). Причина: {reason}', { n, limit: limit }),
+      replies: s.announce ? [] : [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n}${limit ? ` из ${limit}` : ''}).`, [b.name])],
     };
   }
   // the limit is reached and the panel is set to ban: the player is banned for the set time (the count starts anew with the ban)
-  if (s.warnAction === 'ban' && s.banEnabled) {
-    const parsed = parseBanTime(s.warnBanTime);
+  if (pick.step?.action === 'ban' && s.banEnabled) {
+    const parsed = parseBanTime(pick.step.time);
     const t = 'error' in parsed ? { seconds: 86_400 } : parsed;
     const forever = 'forever' in t;
     const until = forever ? 0 : now + t.seconds * 1000;
     const span = forever ? 'навсегда' : formatSpan(t.seconds);
-    const banReason = `лимит предупреждений (${n} из ${s.warnLimit})`;
+    const banReason = `лимит предупреждений (${n} из ${limit})`;
     if (b.targetId && b.targetId !== '0') putBan({ platformId: b.targetId, nick: base.nick, reason: banReason, admin: 'авто', until, kind: 'ban', serverId, scope: s.banScope }, now);
     logMod({ ...base, kind: 'ban', reason: banReason, admin: 'авто', until }, now);
     try { postKickToDiscord(serverId, s.banTemplate.replace(/\{time\}/g, span), { name: b.name, reason: banReason, admin: b.adminName }, now); } catch { /* Discord is not needed for the ban */ }
@@ -26368,20 +26544,21 @@ export function runMod(serverId: number, b: ModInput, now = Date.now()): ModResu
       ok: true, kick: true,
       line: warnLine,
       notice: notice(s.banJoinText.replace(/\{until\}/g, stamp ? `до ${stamp.date} в ${stamp.time}` : 'навсегда'), { reason: banReason }),
-      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name])],
+      replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${limit}): лимит достигнут, игрок забанен ${forever ? 'навсегда' : `на ${span}`}.`, [b.name])],
     };
   }
   // the limit is reached: the player is kicked and the count starts again
-  const kickReason = `лимит предупреждений (${n} из ${s.warnLimit})`;
+  const kickReason = `лимит предупреждений (${n} из ${limit})`;
   logMod({ ...base, kind: 'kick', reason: kickReason, admin: 'авто' }, now);
   try { postKickToDiscord(serverId, s.template, { name: b.name, reason: kickReason, admin: b.adminName }, now); } catch { /* Discord is not needed for the kick */ }
   logToDiscord(s, serverId, '🚪 Игрок кикнут (лимит предупреждений)', 0xed4245, { name: b.name, admin: 'авто', reason: kickReason }, now);
-  db.prepare("DELETE FROM game_mod_log WHERE platform_id = ? AND kind = 'warn'").run(b.targetId);
+  // with a ladder the warnings stay, so the next rung is reached; without one the count starts anew
+  if (!pick.ladder) db.prepare("DELETE FROM game_mod_log WHERE platform_id = ? AND kind = 'warn'").run(b.targetId);
   return {
     ok: true, kick: true,
     line: warnLine,
     notice: notice(s.notifyText, { reason: kickReason }),
-    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${s.warnLimit}): лимит достигнут, игрок кикнут.`, [b.name])],
+    replies: [say(C_GOOD, `* Игроку ${b.name} вынесено предупреждение (${n} из ${limit}): лимит достигнут, игрок кикнут.`, [b.name])],
   };
 }
 
@@ -26531,7 +26708,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       defaultReason: z.string().max(100), requireReason: z.boolean(), protectAdmins: z.boolean(), announce: z.boolean(),
       cooldownSec: z.number().int().min(0).max(3600), logChannelId: z.string().regex(/^(\d{15,25})?$/), maxReason: z.number().int().min(10).max(200),
       banTemplate: line, warnTemplate: line, unbanTemplate: line, banJoinText: line, blockJoinText: line, banScope: z.enum(['all', 'server']).optional(), banDm: z.boolean().optional(), notifyPlayer: z.boolean(), notifyText: line,
-      warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), warnAction: z.enum(['kick', 'ban']).optional(), warnBanTime: z.string().max(12).optional(), rejoinBlockMin: z.number().int().min(0).max(1440),
+      warnLimit: z.number().int().min(0).max(20), warnDays: z.number().int().min(1).max(365), warnAction: z.enum(['kick', 'ban']).optional(), warnBanTime: z.string().max(12).optional(), ladder: z.array(z.object({ at: z.number().int().min(1).max(50), action: z.enum(['kick', 'ban']), time: z.string().max(12) })).max(6).optional(), rejoinBlockMin: z.number().int().min(0).max(1440),
       reasons: z.array(z.object({ key: z.string().max(12), text: z.string().max(100) })).max(20),
     }).safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля' });
@@ -26546,6 +26723,7 @@ export function registerGameNewsKick({ app, admin }: { app: Express; admin: Requ
       banScope: b.data.banScope ?? d.banScope, banDm: b.data.banDm ?? d.banDm,
       warnAction: b.data.warnAction ?? d.warnAction,
       warnBanTime: (() => { const x = plainLine(b.data.warnBanTime ?? ''); return x && !('error' in parseBanTime(x)) ? x : d.warnBanTime; })(),
+      ladder: b.data.ladder ? cleanLadder(b.data.ladder.map((x) => ({ ...x, time: !('error' in parseBanTime(plainLine(x.time))) ? plainLine(x.time) : '1d' }))) : d.ladder,
       banEnabled: b.data.banEnabled ?? d.banEnabled, warnEnabled: b.data.warnEnabled ?? d.warnEnabled,
       template: clean(b.data.template, d.template), banTemplate: clean(b.data.banTemplate, d.banTemplate), warnTemplate: clean(b.data.warnTemplate, d.warnTemplate), unbanTemplate: clean(b.data.unbanTemplate, d.unbanTemplate),
       banJoinText: clean(b.data.banJoinText, d.banJoinText), blockJoinText: clean(b.data.blockJoinText, d.blockJoinText), notifyText: clean(b.data.notifyText, d.notifyText),
@@ -28076,6 +28254,7 @@ import { checkNews } from './gameNewsLogic.js';
 import { queueNews } from './gameNews.js';
 import { pruneJournalSometimes, sweepQueue } from './gameNewsPluginLog.js';
 import { checkPlugins } from './gameNewsPluginAlerts.js';
+import { checkBanEnds } from './banThreads.js';
 import { checkDaily } from './gameNewsDaily.js';
 import { MAX_EVERY, MIN_EVERY, cleanTimes, dueState, inWindow, nextRunAfter, upcomingRuns, type RuleKind, type Schedule } from './gameNewsSchedule.js';
 
@@ -28147,7 +28326,7 @@ export function startGameNewsTimer(): void {
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    try { tickRules(); sweepQueue(); pruneJournalSometimes(); checkPlugins(); checkDaily(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
+    try { tickRules(); sweepQueue(); pruneJournalSometimes(); checkPlugins(); checkBanEnds(); checkDaily(); } catch (e) { log.error('game news scheduler failed', (e as Error).message); } finally { busy = false; }
   }, 20_000);
   timer.unref();
 }
@@ -29235,6 +29414,48 @@ export function hasFeature(version: string, id: string): boolean {
   const f = PLUGIN_FEATURES.find((x) => x.id === id);
   if (!f || !parts(version)) return true;
   return (cmpPlugin(version, f.since) ?? 0) >= 0;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/gamenews"
+  cat > "$APP_DIR/core-backend/src/gamenews/warnLadder.ts" << '__COREGSM_EOF__'
+/** The ladder of warnings: «at 2 a kick, at 3 a ban for a day, at 5 a week, at 7 for ever». Without a ladder the old single limit works. */
+
+export interface LadderStep { at: number; action: 'kick' | 'ban'; time: string }
+
+export const MAX_STEPS = 6;
+
+/** a stored value to clean steps: sorted by `at`, one step per count, bad rows dropped */
+export function cleanLadder(raw: unknown): LadderStep[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<number>();
+  const out: LadderStep[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue;
+    const x = r as Record<string, unknown>;
+    const at = Number(x.at);
+    if (!Number.isInteger(at) || at < 1 || at > 50 || seen.has(at)) continue;
+    const action = x.action === 'ban' ? 'ban' : 'kick';
+    const time = typeof x.time === 'string' && x.time.trim() ? x.time.trim().slice(0, 12) : '1d';
+    seen.add(at);
+    out.push({ at, action, time });
+  }
+  return out.sort((a, b) => a.at - b.at).slice(0, MAX_STEPS);
+}
+
+export interface LadderSettings { warnLimit: number; warnAction: 'kick' | 'ban'; warnBanTime: string; ladder: LadderStep[] }
+
+/**
+ * What the n-th warning does. With a ladder a step fires exactly when the count reaches its number (so every rung fires once),
+ * and `limit` is the next rung, shown in «{n} of {limit}». Without a ladder: the old limit.
+ */
+export function pickStep(s: LadderSettings, n: number): { step: { action: 'kick' | 'ban'; time: string } | null; limit: number; ladder: boolean } {
+  if (s.ladder.length) {
+    const hit = s.ladder.find((x) => x.at === n) ?? null;
+    const next = s.ladder.find((x) => x.at >= n) ?? s.ladder[s.ladder.length - 1];
+    return { step: hit && { action: hit.action, time: hit.time }, limit: next.at, ladder: true };
+  }
+  const hit = s.warnLimit > 0 && n >= s.warnLimit;
+  return { step: hit ? { action: s.warnAction, time: s.warnBanTime } : null, limit: s.warnLimit, ladder: false };
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src"
@@ -32584,6 +32805,38 @@ CREATE INDEX IF NOT EXISTS idx_server_changes ON server_changes(server_id, ts);`
     // how many players saw a message of the panel (the plugin reports it after it showed the message); NULL = not reported (an older plugin)
     up: (db) => addColumn(db, 'game_news_log', 'shown', 'INTEGER'),
   },
+  {
+    version: 36,
+    name: 'ban_threads',
+    // the conversation under an appeal and the notices «the ban ends soon / has ended» (one per ban and kind)
+    up: (db) =>
+      db.exec(`
+CREATE TABLE IF NOT EXISTS ban_appeal_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  appeal_id INTEGER NOT NULL REFERENCES ban_appeals(id) ON DELETE CASCADE,
+  ts INTEGER NOT NULL,
+  side TEXT NOT NULL,
+  author TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ban_appeal_messages ON ban_appeal_messages(appeal_id, id);
+CREATE TABLE IF NOT EXISTS ban_notices (
+  platform_id TEXT NOT NULL,
+  until INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  PRIMARY KEY (platform_id, until, kind)
+);`),
+  },
+  {
+    version: 37,
+    name: 'server_slug',
+    // a short readable name of a server for links (/s/rust-main); empty = none; unique when set
+    up: (db) => {
+      addColumn(db, 'servers', 'slug', "TEXT NOT NULL DEFAULT ''");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_slug ON servers(slug) WHERE slug <> ''");
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -35204,6 +35457,7 @@ export function serialize(r: ServerJoin) {
     port: r.port,
     queryPort: r.query_port,
     displayAddress: r.display_address,
+    slug: r.slug ?? '',
     country: r.country ?? '',
     coverUrl: coverUrl(r.id),
     // the address shown in the panel and on cards
@@ -37781,6 +38035,7 @@ import { db, EFFECTIVE_NAME } from '../db.js';
 import { queueCard } from '../alerts/dmQueue.js';
 import { followCard } from '../alerts/dmCard.js';
 import { dmAvailable, pushToUser } from '../community/subscriptions.js';
+import { serverActions } from '../alerts/pushActions.js';
 import { log } from '../logger.js';
 
 export const MAX_FOLLOWS = 30;
@@ -37838,7 +38093,7 @@ export function notifyFollowers(serverId: number, names: string[], now = Date.no
       insert.run(f.user_id, now, 'player_online', serverId, text);
       touch.run(now, f.user_id, f.nick_key);
       if (f.discord_id && dmAvailable()) queueCard({ userId: f.user_id, discordId: f.discord_id, kind: 'follow', serverId, card: (c) => followCard(c, { nick: shown.get(f.nick_key) ?? f.nick_key, server: info.n, address, serverId, ts: now }) }, now);
-      pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}` });
+      pushToUser(f.user_id, { title: info.n, body: text, url: `/servers/${serverId}`, tag: `follow-${f.nick_key}`, actions: serverActions(serverId) });
       n++;
     }
     return n;
@@ -40598,6 +40853,30 @@ router.patch('/internal/bindings/:id', internal, (req, res) => {
 });
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/serverSlug.ts" << '__COREGSM_EOF__'
+/** A short readable name of a server for links: «rust-main» in /s/rust-main and /servers/rust-main. The number still works. */
+
+export const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const SLUG_MIN = 2;
+export const SLUG_MAX = 40;
+
+/** why a slug is not good, or null; a slug of digits only would be taken for a number */
+export function slugProblem(raw: string): 'format' | 'number' | null {
+  const s = raw.trim();
+  if (s.length < SLUG_MIN || s.length > SLUG_MAX || !SLUG_RE.test(s)) return 'format';
+  if (/^\d+$/.test(s)) return 'number';
+  return null;
+}
+
+const TRANSLIT: Record<string, string> = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+
+/** a suggestion from the title: «Мой Rust #1» → «moy-rust-1» */
+export function slugFrom(title: string): string {
+  const latin = Array.from(title.toLowerCase()).map((c) => TRANSLIT[c] ?? c).join('');
+  return latin.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, SLUG_MAX).replace(/-+$/, '');
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/servers.ts" << '__COREGSM_EOF__'
 /** Game servers: list and CRUD, server page data, history, PNG card, share page, status page. */
 import { liveHandler } from '../live.js';
@@ -40620,6 +40899,7 @@ import { downtimeByDay, incidentsSince } from '../alerts/incidents.js';
 import { completeOrder } from '../monitoring/serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
+import { SLUG_RE, slugProblem } from './serverSlug.js';
 import { publicNotes } from '../alerts/statusNotes.js';
 import { buildAtom, incidentEntry, type FeedEntry } from '../alerts/statusFeedLogic.js';
 
@@ -40653,7 +40933,19 @@ const serverSchema = z.object({
     .optional(),
   // two-letter country code shown in the Discord message; empty = detect from the address
   country: z.string().trim().regex(/^([A-Za-z]{2})?$/, 'Страна: двухбуквенный код').optional(),
+  // a short readable name for links: rust-main (empty = none)
+  slug: z.string().trim().toLowerCase().max(40).optional(),
 });
+
+/** a slug that is not good or is taken by another server; an empty one is fine (none) */
+function slugError(slug: string, selfId: number): { status: number; error: string } | null {
+  if (!slug) return null;
+  const p = slugProblem(slug);
+  if (p === 'format') return { status: 400, error: 'Короткое имя: латиница, цифры и дефисы, от 2 до 40 знаков' };
+  if (p === 'number') return { status: 400, error: 'Короткое имя не может состоять только из цифр' };
+  const taken = db.prepare('SELECT id FROM servers WHERE slug = ? AND id <> ?').get(slug, selfId);
+  return taken ? { status: 409, error: 'Это короткое имя уже занято другим сервером' } : null;
+}
 
 // live updates: a signal, not data (see live.ts)
 router.get('/api/live', viewer, liveHandler);
@@ -40696,14 +40988,24 @@ router.post(
   wrap(async (req, res) => {
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+    const bad = slugError(b.data.slug ?? '', 0);
+    if (bad) return res.status(bad.status).json({ error: bad.error });
     const info = db
-      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), Date.now());
+      .prepare('INSERT INTO servers (name, game, host, port, query_port, display_address, country, slug, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), b.data.slug ?? '', Date.now());
     const row = db.prepare('SELECT * FROM servers WHERE id = ?').get(info.lastInsertRowid) as ServerRow;
     await refreshServer(row);
     res.status(201).json(getServer(row.id));
   }),
 );
+
+// a readable name to the number of the server: the page opens /servers/rust-main by this
+router.get('/api/servers/by-slug/:slug', viewer, (req, res) => {
+  const slug = String(req.params.slug ?? '').toLowerCase();
+  const row = SLUG_RE.test(slug) ? (db.prepare('SELECT id FROM servers WHERE slug = ?').get(slug) as { id: number } | undefined) : undefined;
+  if (!row) return res.status(404).json({ error: 'Сервер не найден' });
+  res.json({ id: row.id });
+});
 
 // the manual order of the servers (up/down in the admin table); registered before /api/servers/:id
 router.put('/api/servers/order', allow('servers'), (req, res) => {
@@ -40723,9 +41025,11 @@ router.put(
     const id = Number(req.params.id);
     const b = serverSchema.safeParse(req.body);
     if (!b.success) return res.status(400).json({ error: 'Проверьте поля формы' });
+    const bad = slugError(b.data.slug ?? '', id);
+    if (bad) return res.status(bad.status).json({ error: bad.error });
     const r = db
-      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=? WHERE id=?')
-      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), id);
+      .prepare('UPDATE servers SET name=?, game=?, host=?, port=?, query_port=?, display_address=?, country=?, slug=CASE WHEN ? = 1 THEN ? ELSE slug END WHERE id=?')
+      .run(b.data.name ?? '', b.data.game, b.data.host, b.data.port, b.data.queryPort ?? null, b.data.displayAddress ?? '', (b.data.country ?? '').toUpperCase(), b.data.slug === undefined ? 0 : 1, b.data.slug ?? '', id);
     if (!r.changes) return res.status(404).json({ error: 'Сервер не найден' });
     await refreshServer(db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as ServerRow);
     res.json(getServer(id));
@@ -40939,6 +41243,15 @@ const esc = (v: unknown) =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+// /s/rust-main goes to /s/3 (the same card for the link preview)
+router.get('/s/:name', (req, res, next) => {
+  const name = String(req.params.name ?? '');
+  if (/^\d+$/.test(name) || !SLUG_RE.test(name.toLowerCase())) return next();
+  const row = db.prepare('SELECT id FROM servers WHERE slug = ?').get(name.toLowerCase()) as { id: number } | undefined;
+  if (!row) return next();
+  res.redirect(302, `/s/${row.id}`);
+});
 
 router.get('/s/:id', param('id'), (req, res) => {
   res.set({ 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
@@ -113529,18 +113842,23 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(fetch(e.request).catch(async () => (await caches.match(OFFLINE)) || Response.error()));
 });
 
-// a notification from the panel: { title, body, url, tag }
+// a notification from the panel: { title, body, url, tag, actions }
 self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data ? e.data.json() : {}; } catch { m = { body: e.data ? e.data.text() : '' }; }
   if (!m || typeof m !== 'object') m = {};
+  // up to two buttons: { action, title, url }; the browser shows them where it can, the click goes to the address of the pressed one
+  const buttons = Array.isArray(m.actions) ? m.actions.filter((a) => a && typeof a.action === 'string' && typeof a.title === 'string' && typeof a.url === 'string').slice(0, 2) : [];
+  const urls = {};
+  for (const a of buttons) urls[a.action] = a.url;
   e.waitUntil(self.registration.showNotification(String(m.title || 'CoreGSM'), {
     body: String(m.body || ''),
     icon: '/logo-192.png',
     badge: '/logo-128.png',
     tag: m.tag ? String(m.tag) : undefined,
     renotify: !!m.tag,
-    data: { url: typeof m.url === 'string' ? m.url : '/' },
+    actions: buttons.map((a) => ({ action: a.action, title: a.title })),
+    data: { url: typeof m.url === 'string' ? m.url : '/', urls },
   }));
 });
 
@@ -113555,7 +113873,9 @@ const safeUrl = (raw) => {
 // a click opens the page of the notification: an open tab of the panel is reused
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = safeUrl(e.notification.data && e.notification.data.url);
+  const d = e.notification.data || {};
+  // a pressed button has its own address; a press on the notification itself opens the main one
+  const url = safeUrl((e.action && d.urls && d.urls[e.action]) || d.url);
   e.waitUntil((async () => {
     const tabs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of tabs) {
@@ -123849,6 +124169,8 @@ export interface Server {
   queryPort: number | null;
   /** what people see instead of host:port ('' = not set) */
   displayAddress: string;
+  /** a short readable name for links: /s/rust-main ('' = none) */
+  slug?: string;
   /** country shown in Discord ('' = detected automatically) */
   country: string;
   /** "/api/covers/<id>.jpg?v=..." when an administrator uploaded a cover picture */
@@ -123898,6 +124220,8 @@ export interface ServerInput {
   port: number;
   queryPort: number | null;
   displayAddress: string;
+  /** a short readable name for links ('' = none) */
+  slug?: string;
   /** ISO country code shown in Discord; '' = detect automatically */
   country: string;
 }
@@ -125525,6 +125849,71 @@ describe('AppFooter', () => {
     expect(html).toContain('href="/servers"');
   });
 });
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/AppealThread.tsx" << '__COREGSM_EOF__'
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api } from '../api';
+import { t, useI18n } from '../i18n';
+import { ErrorLine, errText, fmtDateTime } from '../ui';
+
+interface Msg { id: number; at: number; side: 'staff' | 'player'; author: string; text: string }
+interface Thread { appeal: { id: number; nick: string; status: string; canReply: boolean }; messages: Msg[] }
+
+/** the conversation under an appeal: the staff asks, the signed-in author answers; closed with the decision */
+export default function AppealThread({ id, onSent }: { id: number; onSent?: () => void }) {
+  useI18n();
+  const [th, setTh] = useState<Thread | null>(null);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const end = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(() => api<Thread>(`/bans/appeals/${id}/messages`).then((r) => { setTh(r); setError(''); }).catch((e: unknown) => setError(errText(e))), [id]);
+  useEffect(() => { void load(); }, [load]);
+  const count = th?.messages.length ?? 0;
+  useEffect(() => { if (count > 0) end.current?.scrollIntoView?.({ block: 'nearest' }); }, [count]);
+
+  const send = async (e: { preventDefault: () => void }) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setBusy(true);
+    try {
+      await api(`/bans/appeals/${id}/messages`, 'POST', { text: text.trim() });
+      setText('');
+      await load();
+      onSent?.();
+    } catch (err) {
+      setError(errText(err));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="ap-thread" data-testid="appeal-thread">
+      <ErrorLine text={error} />
+      {th && th.messages.length === 0 && <p className="ap-none">{t('bans.thread.none')}</p>}
+      {th && th.messages.length > 0 && (
+        <ul className="ap-msgs" aria-label={t('bans.thread.title')}>
+          {th.messages.map((m) => (
+            <li key={m.id} className={`ap-msg ap-${m.side}`}>
+              <div className="ap-who"><b>{m.author}</b> <span>{m.side === 'staff' ? t('bans.thread.staff') : t('bans.thread.player')}</span> <time dateTime={new Date(m.at).toISOString()}>{fmtDateTime(m.at)}</time></div>
+              <p>{m.text}</p>
+            </li>
+          ))}
+          <div ref={end} />
+        </ul>
+      )}
+      {th && !th.appeal.canReply && <p className="ap-closed">{t('bans.thread.closed')}</p>}
+      {th?.appeal.canReply && (
+        <form className="ap-form" onSubmit={(e) => void send(e)}>
+          <textarea className="input" rows={2} value={text} maxLength={1000} placeholder={t('bans.thread.placeholder')} aria-label={t('bans.thread.placeholder')} onChange={(e) => setText(e.target.value)} />
+          <button type="submit" className="btn btn-sm" disabled={busy || !text.trim()}>{t('bans.thread.send')}</button>
+        </form>
+      )}
+    </div>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ArtPic.tsx" << '__COREGSM_EOF__'
@@ -146228,6 +146617,8 @@ export interface KickSettings {
   warnDays: number;
   warnAction: 'kick' | 'ban';
   warnBanTime: string;
+  /** the ladder of warnings; empty = the single limit above */
+  ladder: { at: number; action: 'kick' | 'ban'; time: string }[];
   rejoinBlockMin: number;
   reasons: KickReason[];
 }
@@ -146242,7 +146633,7 @@ export const DEFAULT_KICK: KickSettings = {
   banJoinText: '* Вы забанены {until}. Причина: {reason}',
   blockJoinText: '* Вы недавно были кикнуты. Подождите ещё {left}, прежде чем зайти.', banScope: 'all', banDm: true,
   notifyPlayer: true, notifyText: '* Вы были кикнуты. Причина: {reason}',
-  warnLimit: 3, warnDays: 30, warnAction: 'kick', warnBanTime: '1d', rejoinBlockMin: 0,
+  warnLimit: 3, warnDays: 30, warnAction: 'kick', warnBanTime: '1d', ladder: [], rejoinBlockMin: 0,
   reasons: [{ key: '1', text: 'Спам' }, { key: '2', text: 'Оскорбления' }, { key: '3', text: 'Читы или использование багов' }, { key: '4', text: 'Мешает другим игрокам' }],
 };
 
@@ -149007,6 +149398,16 @@ const en: Record<keyof typeof ru, string> = {
   'bans.appeals.noneText': 'The appeals of banned players appear here.',
   'bans.alerts': 'Send me a push about new bans and appeals',
   'bans.alerts.hint': 'Works when notifications are on in the profile on this device.',
+  'bans.thread.open': 'Conversation',
+  'bans.thread.title': 'The conversation under the appeal',
+  'bans.thread.none': 'No messages yet. A moderator may ask a question and you can answer here.',
+  'bans.thread.staff': 'moderator',
+  'bans.thread.player': 'author of the appeal',
+  'bans.thread.closed': 'The appeal is decided, the conversation is closed.',
+  'bans.thread.placeholder': 'Your message',
+  'bans.thread.send': 'Send',
+  'bans.mine.title': 'My appeals',
+  'bans.mine.open': 'waiting for an answer',
   'nav.admin': 'Admin',
   'nav.sections': 'Sections',
   'net.offline': 'You are offline. Showing the last data received.',
@@ -150280,6 +150681,10 @@ const en: Record<keyof typeof ru, string> = {
   'gn.kk.warnActionBan': 'Ban',
   'gn.kk.warnBanTime': 'How long the ban lasts',
   'gn.kk.warnBanTimeHint': '30m, 2h, 7d, 2w or перм (for ever); after the ban the warnings count anew. If the .ban commands are off, it is a kick',
+  'gn.kk.ladder': 'Ladder of punishments',
+  'gn.kk.ladderNote': 'Each step fires when a player reaches that many warnings: for example a kick at the 2nd, a ban for a day at the 3rd, a ban for ever at the 5th. The warnings are not reset. While there are no steps, the single limit above works.',
+  'gn.kk.ladderAdd': 'Add a step',
+  'gn.kk.ladderAt': 'At warning no.',
   'gn.kk.reasonsNote': 'Short names of reasons: an administrator types .kick Name 1 and the chat and the journal get the text of the reason. Works for .kick, .ban, .warn and /game-kick in Discord.',
   'gn.kk.reasonsEmpty': 'No short reasons yet',
   'gn.kk.reasonsEmptyHint': 'Add, for example, «1 → Spam»: the command is quicker to type.',
@@ -152654,6 +153059,10 @@ const en: Record<keyof typeof ru, string> = {
   'd2.sf.countryAuto': 'Detect automatically from the address',
   'd2.sf.countryHint': 'Auto-detection does not work for local network addresses: pick the country by hand and the flag will appear in the message.',
   'd2.sf.displayHint': 'The query uses the address above, while people see this address on the page and in the Discord card. Needed if the server is on a local network but reachable from outside under another IP or domain.',
+  'd2.sf.slug': 'Short name for the link',
+  'd2.sf.slugEx': 'rust-main',
+  'd2.sf.slugHint': 'Latin letters, digits and dashes. The server then opens at /servers/rust-main, and the link for a chat or Discord is /s/rust-main.',
+  'd2.sf.slugLink': 'Link for a chat or Discord: {link}',
   'd2.sf.cover': 'Cover',
   'd2.sf.uploading': 'Uploading…',
   'd2.sf.upload': 'Upload an image',
@@ -154067,6 +154476,12 @@ const errorsEn: Record<string, string> = {
   game_account_unknown: 'The panel does not know the game account of the player: give the ban in the game with the .ban command',
   appeal_exists: 'An appeal for this nickname has already been sent and waits for an answer',
   appeal_not_found: 'The ban appeal was not found',
+  appeal_message_bad: 'Write a message (up to 1000 characters)',
+  appeal_decided: 'The appeal is already decided',
+  appeal_thread_full: 'There are too many messages in the conversation',
+  slug_format: 'Short name: latin letters, digits and dashes, 2 to 40 characters',
+  slug_number: 'A short name cannot be made of digits only',
+  slug_taken: 'This short name is already taken by another server',
   too_many_attempts: 'Too many attempts. Wait 10 minutes.',
   bad_data: 'Invalid data',
   bad_data_lower: 'invalid data',
@@ -154498,6 +154913,16 @@ const ru = {
   'bans.appeals.noneText': 'Заявки забаненных игроков появятся здесь.',
   'bans.alerts': 'Присылать push о новых банах и заявках',
   'bans.alerts.hint': 'Работает, если в профиле включены уведомления на этом устройстве.',
+  'bans.thread.open': 'Переписка',
+  'bans.thread.title': 'Переписка по заявке',
+  'bans.thread.none': 'Сообщений пока нет. Модератор может задать вопрос, а вы ответить здесь.',
+  'bans.thread.staff': 'модератор',
+  'bans.thread.player': 'автор заявки',
+  'bans.thread.closed': 'Решение по заявке принято, переписка закрыта.',
+  'bans.thread.placeholder': 'Ваше сообщение',
+  'bans.thread.send': 'Отправить',
+  'bans.mine.title': 'Мои заявки',
+  'bans.mine.open': 'ждёт ответа',
   'nav.admin': 'Админка',
   'nav.sections': 'Разделы',
   'net.offline': 'Нет сети. Показаны последние полученные данные.',
@@ -155771,6 +156196,10 @@ const ru = {
   'gn.kk.warnActionBan': 'Бан',
   'gn.kk.warnBanTime': 'На какой срок бан',
   'gn.kk.warnBanTimeHint': '30m, 2h, 7d, 2w или перм; после бана предупреждения считаются заново. Если команды .ban выключены, будет кик',
+  'gn.kk.ladder': 'Лестница наказаний',
+  'gn.kk.ladderNote': 'Каждая ступень срабатывает, когда игрок набирает столько предупреждений: например, на 2-м кик, на 3-м бан на сутки, на 5-м бан навсегда. Предупреждения при этом не сбрасываются. Пока ступеней нет, работает один лимит выше.',
+  'gn.kk.ladderAdd': 'Добавить ступень',
+  'gn.kk.ladderAt': 'На предупреждении №',
   'gn.kk.reasonsNote': 'Короткие имена причин: админ вводит .kick Ник 1, а в чате и журнале будет текст причины. Работает для .kick, .ban, .warn и /game-kick в Discord.',
   'gn.kk.reasonsEmpty': 'Коротких причин пока нет',
   'gn.kk.reasonsEmptyHint': 'Добавьте, например, «1 → Спам»: так быстрее набирать команду.',
@@ -158145,6 +158574,10 @@ const ru = {
   'd2.sf.countryAuto': 'Определить автоматически по адресу',
   'd2.sf.countryHint': 'Автоопределение не работает для адресов в локальной сети: выберите страну вручную, и флаг появится в сообщении.',
   'd2.sf.displayHint': 'Опрос идёт по адресу выше, а людям на странице и в карточке Discord показывается этот адрес. Нужен, если сервер в локальной сети, а снаружи доступен по другому IP или домену.',
+  'd2.sf.slug': 'Короткое имя для ссылки',
+  'd2.sf.slugEx': 'rust-main',
+  'd2.sf.slugHint': 'Латиница, цифры и дефисы. Тогда сервер открывается по /servers/rust-main, а ссылка для чата и Discord выглядит как /s/rust-main.',
+  'd2.sf.slugLink': 'Ссылка для чата и Discord: {link}',
   'd2.sf.cover': 'Обложка',
   'd2.sf.uploading': 'Загружаю…',
   'd2.sf.upload': 'Загрузить картинку',
@@ -163056,7 +163489,7 @@ export default function BackupsCard() {
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Bans.tsx" << '__COREGSM_EOF__'
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { t, useI18n } from '../i18n';
 import LiveBadge from '../components/LiveBadge';
@@ -163065,6 +163498,7 @@ import { Empty, ErrorLine, LoadError, PageHead, ago, errText, fmtDateTime, toast
 import { useAuth } from '../auth';
 import { Switch } from '../components/Switch';
 import ArtPic from '../components/ArtPic';
+import AppealThread from '../components/AppealThread';
 import type { Appeal, BanHistoryItem, BansData, PublicBan } from '../shared/bans';
 import '../styles/bans.css';
 
@@ -163197,13 +163631,45 @@ function AppealForm() {
   );
 }
 
+/** the appeals of the signed-in person with the conversation under each */
+function MyAppeals() {
+  useI18n();
+  const [list, setList] = useState<{ id: number; at: number; nick: string; status: string; messages: number }[]>([]);
+  const [openId, setOpenId] = useState<number | null>(null);
+  useEffect(() => { api<typeof list>('/bans/appeals/mine').then(setList).catch(() => undefined); }, []);
+  if (list.length === 0) return null;
+  return (
+    <section className="bn-appeal" aria-label={t('bans.mine.title')}>
+      <h3 className="bn-appeal-head"><b>{t('bans.mine.title')}</b></h3>
+      <ul className="bn-list">
+        {list.map((a) => (
+          <li key={a.id} className={`bn-row bn-appeal-row is-${a.status}`}>
+            <div className="bn-main">
+              <div className="bn-head"><b className="bn-nick">{a.nick}</b><time className="bn-when" dateTime={new Date(a.at).toISOString()} title={fmtDateTime(a.at)}>{ago(a.at)}</time></div>
+              <div className="bn-meta">
+                <span className={`pill ${a.status === 'accepted' ? 'pill-ok' : a.status === 'rejected' ? 'pill-mute' : 'pill-warn'}`}>{a.status === 'accepted' ? t('bans.appeal.accepted') : a.status === 'rejected' ? t('bans.appeal.rejected') : t('bans.mine.open')}</span>
+                <button type="button" className="bn-chip bn-thread-btn" aria-expanded={openId === a.id} onClick={() => setOpenId(openId === a.id ? null : a.id)}>{t('bans.thread.open')}{a.messages ? ` · ${a.messages}` : ''}</button>
+              </div>
+              {openId === a.id && <AppealThread id={a.id} />}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 const fetchAppeals = () => api<Appeal[]>('/bans/appeals');
 
 /** the staff: the appeals; a decision, with the ban lifted at once if asked */
 function AppealsPanel({ onChanged }: { onChanged: () => void }) {
   useI18n();
   const [list, setList] = useState<Appeal[] | null>(null);
+  const [counts, setCounts] = useState<Record<string, { messages: number; fromPlayer: number }>>({});
+  const [openId, setOpenId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const loadCounts = useCallback(() => api<Record<string, { messages: number; fromPlayer: number }>>('/bans/appeals-counts').then(setCounts).catch(() => undefined), []);
+  useEffect(() => { void loadCounts(); }, [loadCounts]);
   const load = () => fetchAppeals().then(setList).catch((e: Error) => setError(e.message));
   useEffect(() => {
     let off = false;
@@ -163239,7 +163705,11 @@ function AppealsPanel({ onChanged }: { onChanged: () => void }) {
               <div className="bn-meta">
                 {a.contact && <span className="bn-chip">{t('bans.appeal.contactOf', { c: a.contact })}</span>}
                 {a.decidedBy && <span className="bn-chip">{t('bans.appeal.by', { name: a.decidedBy })}</span>}
+                <button type="button" className="bn-chip bn-thread-btn" aria-expanded={openId === a.id} onClick={() => setOpenId(openId === a.id ? null : a.id)}>
+                  {t('bans.thread.open')}{counts[a.id] ? ` · ${counts[a.id].messages}` : ''}
+                </button>
               </div>
+              {openId === a.id && <AppealThread id={a.id} onSent={() => void loadCounts()} />}
             </div>
             <div className="bn-state">
               {a.status === 'open' ? (
@@ -163343,6 +163813,7 @@ export function BansView({ serverId = 0, onLoaded }: { serverId?: number; onLoad
                 </ul>
               )}
               {!serverId && <AppealForm />}
+              {!serverId && !staff && me && <MyAppeals />}
             </>
           )}
           {tab === 'history' && (
@@ -165820,24 +166291,45 @@ export function KickCard({ initial }: { initial: KickSettings }) {
           </Field>
           <VarChips vars={[...varsAll, { name: 'n', example: '2' }, { name: 'limit', example: String(f.warnLimit) }]} onPick={(v) => set('warnTemplate', `${f.warnTemplate} ${v}`.trim())} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label={t('gn.kk.warnLimit')}>
+            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnLimit')}>
               <input className="input w-32" type="number" min={0} max={20} value={f.warnLimit} onChange={(e) => set('warnLimit', Number(e.target.value))} />
-            </Field>
+            </Field>}
             <Field label={t('gn.kk.warnDays')}>
               <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
             </Field>
-            <Field label={t('gn.kk.warnAction')}>
+            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnAction')}>
               <select className="input w-48" value={f.warnAction} onChange={(e) => set('warnAction', e.target.value === 'ban' ? 'ban' : 'kick')}>
                 <option value="kick">{t('gn.kk.warnActionKick')}</option>
                 <option value="ban">{t('gn.kk.warnActionBan')}</option>
               </select>
-            </Field>
-            {f.warnAction === 'ban' && (
+            </Field>}
+            {!(f.ladder ?? []).length && f.warnAction === 'ban' && (
               <Field label={t('gn.kk.warnBanTime')}>
                 <p className="mb-1 text-xs text-mute">{t('gn.kk.warnBanTimeHint')}</p>
                 <input className="input w-32 font-mono" value={f.warnBanTime} maxLength={12} onChange={(e) => set('warnBanTime', e.target.value)} />
               </Field>
             )}
+          </div>
+          <div className="space-y-2" data-testid="warn-ladder">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="font-extrabold">{t('gn.kk.ladder')}</h4>
+                <p className="text-sm font-semibold text-mute">{t('gn.kk.ladderNote')}</p>
+              </div>
+              <button type="button" className="btn btn-soft btn-sm" disabled={(f.ladder ?? []).length >= 6} onClick={() => set('ladder', [...(f.ladder ?? []), { at: Math.max(0, ...(f.ladder ?? []).map((x) => x.at)) + 1, action: 'kick', time: '1d' }])}>{t('gn.kk.ladderAdd')}</button>
+            </div>
+            {(f.ladder ?? []).map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-bold">{t('gn.kk.ladderAt')}</span>
+                <input className="input w-20" type="number" min={1} max={50} aria-label={t('gn.kk.ladderAt')} value={r.at} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, at: Number(e.target.value) } : x)))} />
+                <select className="input w-40" aria-label={t('gn.kk.warnAction')} value={r.action} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, action: e.target.value === 'ban' ? 'ban' : 'kick' } : x)))}>
+                  <option value="kick">{t('gn.kk.warnActionKick')}</option>
+                  <option value="ban">{t('gn.kk.warnActionBan')}</option>
+                </select>
+                {r.action === 'ban' && <input className="input w-28 font-mono" aria-label={t('gn.kk.warnBanTime')} value={r.time} maxLength={12} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, time: e.target.value } : x)))} />}
+                <button type="button" className="btn btn-ghost btn-sm" aria-label={t('common.remove')} onClick={() => set('ladder', (f.ladder ?? []).filter((_, j) => j !== i))}>{t('common.remove')}</button>
+              </div>
+            ))}
           </div>
         </WithPreview>
       )}
@@ -171850,7 +172342,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       {editing && (
         <ServerForm
-          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }}
+          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, slug: s.slug, country: s.country }}
           id={s.id}
           coverUrl={s.coverUrl}
           onCoverChanged={() => void load()}
@@ -171886,7 +172378,7 @@ export function hostError(v: string): string {
   return '';
 }
 
-export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', country: '' };
+export const emptyServer: ServerInput = { name: '', game: 'minecraft', host: '', port: 25565, queryPort: null, displayAddress: '', slug: '', country: '' };
 
 /** Add / edit a server. The first screen asks only what is needed; the rest is under "Дополнительно". */
 export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onClose, onSaved }: { initial: ServerInput; id?: number; coverUrl?: string | null; onCoverChanged?: () => void; onClose: () => void; onSaved: () => void }) {
@@ -171931,7 +172423,7 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
   const [test, setTest] = useState<TestResult | null>(null);
 
   // "advanced" is open when it already holds something (editing)
-  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.country || coverUrl);
+  const advancedUsed = !!(initial.name || initial.queryPort || initial.displayAddress || initial.slug || initial.country || coverUrl);
 
   const profiles = useGameProfiles();
   // true once the user typed a port themselves: a game change must not overwrite it
@@ -172076,6 +172568,10 @@ export default function ServerForm({ initial, id, coverUrl, onCoverChanged, onCl
             <Field label={t('d2.sf.display')}>
               <input id="srv-display" className="input font-mono" value={f.displayAddress} onChange={(e) => change({ displayAddress: e.target.value.trim() })} maxLength={100} placeholder={t('d2.sf.displayEx')} />
             </Field>
+            <Field label={t('d2.sf.slug')}>
+              <input id="srv-slug" className="input font-mono" value={f.slug ?? ''} onChange={(e) => change({ slug: e.target.value.trim().toLowerCase() })} maxLength={40} placeholder={t('d2.sf.slugEx')} />
+            </Field>
+            <p className="-mt-2 text-sm font-semibold text-mute">{f.slug ? t('d2.sf.slugLink', { link: `${window.location.origin}/s/${f.slug}` }) : t('d2.sf.slugHint')}</p>
             <Field label={t('d2.sf.country')}>
               <select id="srv-country" className="input" value={f.country} onChange={(e) => change({ country: e.target.value })}>
                 <option value="">{t('d2.sf.countryAuto')}</option>
@@ -172147,12 +172643,29 @@ import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
 import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
 
+/** /servers/rust-main: finds the number of the server by its short name and opens the usual address */
+function SlugGate({ slug, tab }: { slug: string; tab: string }) {
+  useI18n();
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    let off = false;
+    api<{ id: number }>(`/servers/by-slug/${encodeURIComponent(slug)}`)
+      .then((r) => { if (off) return; if (Number.isInteger(r?.id) && r.id > 0) navigate(`/servers/${r.id}${tab ? `/${tab}` : ''}`, { replace: true }); else setMissing(true); })
+      .catch(() => { if (!off) setMissing(true); });
+    return () => { off = true; };
+  }, [slug, tab]);
+  if (missing) return <NotFound kind="server" />;
+  return <div className="skeleton h-40" aria-busy="true" />;
+}
+
 export default function ServersPage({ sub }: { sub: string }) {
   // "12/players" -> server 12, tab "players"
   const [idPart = '', tabPart = ''] = sub.split('/');
   const id = Number(idPart);
   const tab = (SERVER_TABS as readonly string[]).includes(tabPart) ? tabPart : '';
   if (idPart && /^\d+$/.test(idPart) && Number.isInteger(id) && id > 0 && (!tabPart || tab)) return <ServerDetail id={id} tab={tab} />;
+  // "/servers/rust-main": a short name of a server
+  if (idPart && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(idPart) && !/^\d+$/.test(idPart) && (!tabPart || tab)) return <SlugGate slug={idPart} tab={tab} />;
   // "/servers/abc" or an unknown tab: not a server page
   if (sub) return <NotFound kind="server" />;
   return <ServerList />;
@@ -178270,6 +178783,19 @@ __COREGSM_EOF__
   .live-rail { position: sticky; top: 1rem; }
 }
 @media (max-width: 1279px) { .live-rail { display: none; } }
+
+/* the conversation under an appeal */
+.ap-thread { margin-top: 0.75rem; display: grid; gap: 0.6rem; }
+.ap-msgs { display: grid; gap: 0.5rem; max-height: 18rem; overflow-y: auto; padding: 0; margin: 0; list-style: none; }
+.ap-msg { max-width: 34rem; padding: 0.55rem 0.75rem; border-radius: var(--r-3, 12px); background: var(--color-soft); }
+.ap-msg.ap-staff { background: var(--color-okbg); justify-self: start; }
+.ap-msg.ap-player { background: var(--color-soft); justify-self: end; }
+.ap-who { font-size: var(--fs-xs, 0.75rem); font-weight: 700; color: var(--color-mute); display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ap-msg p { margin: 0.2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 600; }
+.ap-form { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+.ap-form textarea { flex: 1 1 14rem; min-height: 2.6rem; }
+.ap-none, .ap-closed { margin: 0; font-size: var(--fs-sm, 0.875rem); font-weight: 600; color: var(--color-mute); }
+.bn-thread-btn { cursor: pointer; border: 0; font: inherit; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/styles"
   cat > "$APP_DIR/core-frontend/src/styles/buttons.css" << '__COREGSM_EOF__'

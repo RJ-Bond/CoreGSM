@@ -90,6 +90,8 @@ export interface Server {
   queryPort: number | null;
   /** what people see instead of host:port ('' = not set) */
   displayAddress: string;
+  /** a short readable name for links: /s/rust-main ('' = none) */
+  slug?: string;
   /** country shown in Discord ('' = detected automatically) */
   country: string;
   /** "/api/covers/<id>.jpg?v=..." when an administrator uploaded a cover picture */
@@ -139,6 +141,8 @@ export interface ServerInput {
   port: number;
   queryPort: number | null;
   displayAddress: string;
+  /** a short readable name for links ('' = none) */
+  slug?: string;
   /** ISO country code shown in Discord; '' = detect automatically */
   country: string;
 }

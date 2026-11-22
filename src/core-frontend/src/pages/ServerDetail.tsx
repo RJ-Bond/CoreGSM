@@ -771,7 +771,7 @@ function ServerDetailView({ id, tab }: { id: number; tab: TabId }) {
 
       {editing && (
         <ServerForm
-          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, country: s.country }}
+          initial={{ name: s.customName, game: s.game, host: s.host, port: s.port, queryPort: s.queryPort, displayAddress: s.displayAddress, slug: s.slug, country: s.country }}
           id={s.id}
           coverUrl={s.coverUrl}
           onCoverChanged={() => void load()}

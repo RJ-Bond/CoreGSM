@@ -68,3 +68,16 @@
   .live-rail { position: sticky; top: 1rem; }
 }
 @media (max-width: 1279px) { .live-rail { display: none; } }
+
+/* the conversation under an appeal */
+.ap-thread { margin-top: 0.75rem; display: grid; gap: 0.6rem; }
+.ap-msgs { display: grid; gap: 0.5rem; max-height: 18rem; overflow-y: auto; padding: 0; margin: 0; list-style: none; }
+.ap-msg { max-width: 34rem; padding: 0.55rem 0.75rem; border-radius: var(--r-3, 12px); background: var(--color-soft); }
+.ap-msg.ap-staff { background: var(--color-okbg); justify-self: start; }
+.ap-msg.ap-player { background: var(--color-soft); justify-self: end; }
+.ap-who { font-size: var(--fs-xs, 0.75rem); font-weight: 700; color: var(--color-mute); display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ap-msg p { margin: 0.2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 600; }
+.ap-form { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+.ap-form textarea { flex: 1 1 14rem; min-height: 2.6rem; }
+.ap-none, .ap-closed { margin: 0; font-size: var(--fs-sm, 0.875rem); font-weight: 600; color: var(--color-mute); }
+.bn-thread-btn { cursor: pointer; border: 0; font: inherit; }
