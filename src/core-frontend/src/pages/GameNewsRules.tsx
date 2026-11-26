@@ -36,6 +36,21 @@ const EXAMPLES: { id: 'discord' | 'restart' | 'rules'; icon: typeof IconAuto; ki
 export default function GameNewsRules({ servers, rules, timezone, reload }: { servers: NewsServerInfo[]; rules: RuleInfo[]; timezone: string; reload: () => void }) {
   useI18n();
   const [draft, setDraft] = useState<{ id: number | null; body: RuleBody } | null>(null);
+  // several rules at once: the ticked ones (a rule that is gone drops out by itself)
+  const [ticked, setTicked] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const picked = rules.filter((r) => ticked.includes(r.id));
+  const bulk = async (kind: 'on' | 'off' | 'delete') => {
+    if (kind === 'delete' && !(await confirmDialog({ title: t('gn.a.bulk.delTitle', { n: picked.length }), danger: true, confirmLabel: t('gn.a.del') }))) return;
+    setBulkBusy(true);
+    const todo = kind === 'delete' ? picked : picked.filter((r) => r.enabled !== (kind === 'on'));
+    const done = await Promise.allSettled(todo.map((r) => (kind === 'delete' ? api(`/game-news/rules/${r.id}`, 'DELETE') : api(`/game-news/rules/${r.id}`, 'PUT', { ...bodyOf(r), enabled: kind === 'on' }))));
+    const failed = done.filter((x) => x.status === 'rejected').length;
+    toast(failed ? t('gn.a.bulk.failed', { n: failed }) : t('gn.a.bulk.done', { n: todo.length }), failed ? 'err' : undefined);
+    setTicked([]);
+    setBulkBusy(false);
+    reload();
+  };
 
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
   const bodyOf = (r: RuleInfo): RuleBody => {
@@ -97,6 +112,22 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
         </>
       )}
 
+      {rules.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
+          <label className="flex items-center gap-2 font-bold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === rules.length} onChange={(e) => setTicked(e.target.checked ? rules.map((r) => r.id) : [])} />
+            {picked.length ? t('gn.a.bulk.picked', { n: picked.length }) : t('gn.a.bulk.all')}
+          </label>
+          {picked.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              <button type="button" className="btn btn-soft btn-sm" disabled={bulkBusy || picked.every((r) => r.enabled)} onClick={() => void bulk('on')}>{t('gn.a.bulk.on')}</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={bulkBusy || picked.every((r) => !r.enabled)} onClick={() => void bulk('off')}>{t('gn.a.bulk.off')}</button>
+              <button type="button" className="btn btn-danger btn-sm" disabled={bulkBusy} onClick={() => void bulk('delete')}>{t('gn.a.del')}</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {rules.length > 0 && (
         <GroupedList
           storageKey="autorules"
@@ -104,6 +135,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
           groups={ruleGroups}
           render={(r) => (
             <div className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
+              {rules.length > 1 && <input type="checkbox" className="mt-2 h-4 w-4 shrink-0 accent-brand" checked={ticked.includes(r.id)} onChange={(e) => setTicked((x) => (e.target.checked ? [...x, r.id] : x.filter((id) => id !== r.id)))} aria-label={t('gn.a.bulk.one', { name: r.name })} />}
               <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
               <div className="min-w-0 flex-1 basis-40">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">

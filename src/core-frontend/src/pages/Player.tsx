@@ -3,6 +3,7 @@
  * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
  */
 import { useEffect, useState } from 'react';
+import PlayerWeekCard from '../components/PlayerWeekCard';
 import { api, ApiError, type Achievement } from '../api';
 import { t, useI18n } from '../i18n';
 import { ActivityStrip } from '../components/profile/Stats';
@@ -120,6 +121,8 @@ export default function PlayerPage({ name }: { name: string }) {
           <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>{t('d2.pl.streak')}</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{t('pf.stats.days', { n: p.streak })}</dd></div>
         </dl>
       </section>
+
+      <PlayerWeekCard name={p.name} byDay={p.byDay} achievements={p.achievements} />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="tile p-4 sm:p-5">

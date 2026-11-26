@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="dc1098253d63"
+COREGSM_BUILD="b40d2abbb3fc"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.78"
+COREGSM_VERSION="1.2.79"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -129914,6 +129914,48 @@ export function OfflineBar() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/PlayerWeekCard.tsx" << '__COREGSM_EOF__'
+import { t, useI18n } from '../i18n';
+import { CopyButton } from '../ui';
+import { weekOf, type AchievementLike, type DaySeconds } from '../pages/playerWeek';
+
+const n = (v: number) => v.toLocaleString([], { maximumFractionDigits: 1 });
+const dayName = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { weekday: 'long' });
+
+/** the week of a player in a few figures, with a line to paste into a chat */
+export default function PlayerWeekCard({ name, byDay, achievements }: { name: string; byDay: DaySeconds[]; achievements?: AchievementLike[] }) {
+  useI18n();
+  const w = weekOf(byDay, achievements);
+  if (!w) return null;
+  const max = Math.max(1, ...w.bars);
+  const delta = Math.round((w.hours - w.before) * 10) / 10;
+  const text = t('wk.share', { name, h: n(w.hours), d: w.days, link: `${window.location.origin}/player/${encodeURIComponent(name)}` });
+  return (
+    <section className="tile p-4 sm:p-5" aria-labelledby="wk-title">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 id="wk-title" className="text-lg font-extrabold">{t('wk.title')}</h2>
+        <CopyButton text={text} label={t('wk.copy')} />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+        <dl className="flex flex-wrap gap-x-8 gap-y-3">
+          <div>
+            <dt className="t-caption">{t('wk.hours')}</dt>
+            <dd className="t-num text-2xl">{t('dur.h', { n: n(w.hours) })}</dd>
+            <dd className={`text-sm font-bold ${delta > 0 ? 'text-ok' : 'text-mute'}`}>{delta > 0 ? t('wk.more', { n: n(delta) }) : delta < 0 ? t('wk.less', { n: n(-delta) }) : t('wk.same')}</dd>
+          </div>
+          <div><dt className="t-caption">{t('wk.days')}</dt><dd className="t-num text-2xl">{t('wk.of7', { n: w.days })}</dd></div>
+          {w.best && <div><dt className="t-caption">{t('wk.best')}</dt><dd className="t-num text-2xl capitalize">{dayName(w.best.date)}</dd><dd className="text-sm font-bold text-mute">{t('dur.h', { n: n(w.best.hours) })}</dd></div>}
+          {w.achievements > 0 && <div><dt className="t-caption">{t('wk.ach')}</dt><dd className="t-num text-2xl">{w.achievements}</dd></div>}
+        </dl>
+        <div className="flex h-16 items-end gap-1.5" role="img" aria-label={t('wk.bars')}>
+          {w.bars.map((v, i) => <span key={i} className="w-4 rounded-t bg-brand" style={{ height: `${Math.max(4, (v / max) * 100)}%`, opacity: v ? 1 : 0.25 }} title={t('dur.h', { n: n(v) })} />)}
+        </div>
+      </div>
+    </section>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/PlayerWelcome.tsx" << '__COREGSM_EOF__'
 import { useState } from 'react';
 import { useAuth } from '../auth';
@@ -151284,6 +151326,14 @@ const en: Record<keyof typeof ru, string> = {
   'gn.a.delAria': 'Delete {name}',
   'gn.a.delTitle': 'Delete the announcement «{name}»?',
   'gn.a.del': 'Delete',
+  'gn.a.bulk.all': 'Select all',
+  'gn.a.bulk.picked': 'Selected: {n}',
+  'gn.a.bulk.one': 'Select “{name}”',
+  'gn.a.bulk.on': 'Switch on',
+  'gn.a.bulk.off': 'Switch off',
+  'gn.a.bulk.delTitle': 'Delete the selected announcements: {n}?',
+  'gn.a.bulk.done': 'Done: {n}',
+  'gn.a.bulk.failed': 'Failed for {n}',
   'gn.a.allServers': 'Every server with the plugin',
   'gn.a.everyMin': 'every {n} min',
   'gn.a.everyHours': 'every {n} h',
@@ -153423,6 +153473,18 @@ const en: Record<keyof typeof ru, string> = {
   'd2.pl.first': 'first seen {when}',
   'd2.pl.places': 'Ranks among players',
   'd2.pl.week': 'this week',
+  'wk.title': 'The week of the player',
+  'wk.copy': 'Copy the summary',
+  'wk.share': '{name} this week: {h} h in the game, played on {d} of 7 days. {link}',
+  'wk.hours': 'In the game in 7 days',
+  'wk.more': '{n} h more than the week before',
+  'wk.less': '{n} h less than the week before',
+  'wk.same': 'the same as the week before',
+  'wk.days': 'Days with a game',
+  'wk.of7': '{n} of 7',
+  'wk.best': 'Best day',
+  'wk.ach': 'New achievements',
+  'wk.bars': 'Hours by day for the week',
   'd2.pl.month': 'this month',
   'd2.pl.allTime': 'all time',
   'd2.pl.hours': 'Hours',
@@ -156837,6 +156899,14 @@ const ru = {
   'gn.a.delAria': 'Удалить {name}',
   'gn.a.delTitle': 'Удалить автообъявление «{name}»?',
   'gn.a.del': 'Удалить',
+  'gn.a.bulk.all': 'Выбрать все',
+  'gn.a.bulk.picked': 'Выбрано: {n}',
+  'gn.a.bulk.one': 'Выбрать «{name}»',
+  'gn.a.bulk.on': 'Включить',
+  'gn.a.bulk.off': 'Выключить',
+  'gn.a.bulk.delTitle': 'Удалить выбранные объявления: {n}?',
+  'gn.a.bulk.done': 'Готово: {n}',
+  'gn.a.bulk.failed': 'Не получилось для {n}',
   'gn.a.allServers': 'Все серверы с плагином',
   'gn.a.everyMin': 'каждые {n} мин',
   'gn.a.everyHours': 'каждые {n} ч',
@@ -158976,6 +159046,18 @@ const ru = {
   'd2.pl.first': 'впервые {when}',
   'd2.pl.places': 'Места среди игроков',
   'd2.pl.week': 'за неделю',
+  'wk.title': 'Неделя игрока',
+  'wk.copy': 'Скопировать сводку',
+  'wk.share': '{name} за неделю: {h} ч в игре, дней с игрой {d} из 7. {link}',
+  'wk.hours': 'В игре за 7 дней',
+  'wk.more': 'на {n} ч больше, чем неделей раньше',
+  'wk.less': 'на {n} ч меньше, чем неделей раньше',
+  'wk.same': 'столько же, сколько неделей раньше',
+  'wk.days': 'Дней с игрой',
+  'wk.of7': '{n} из 7',
+  'wk.best': 'Лучший день',
+  'wk.ach': 'Новых достижений',
+  'wk.bars': 'Часы по дням за неделю',
   'd2.pl.month': 'за месяц',
   'd2.pl.allTime': 'за всё время',
   'd2.pl.hours': 'Часов',
@@ -167967,6 +168049,21 @@ const EXAMPLES: { id: 'discord' | 'restart' | 'rules'; icon: typeof IconAuto; ki
 export default function GameNewsRules({ servers, rules, timezone, reload }: { servers: NewsServerInfo[]; rules: RuleInfo[]; timezone: string; reload: () => void }) {
   useI18n();
   const [draft, setDraft] = useState<{ id: number | null; body: RuleBody } | null>(null);
+  // several rules at once: the ticked ones (a rule that is gone drops out by itself)
+  const [ticked, setTicked] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const picked = rules.filter((r) => ticked.includes(r.id));
+  const bulk = async (kind: 'on' | 'off' | 'delete') => {
+    if (kind === 'delete' && !(await confirmDialog({ title: t('gn.a.bulk.delTitle', { n: picked.length }), danger: true, confirmLabel: t('gn.a.del') }))) return;
+    setBulkBusy(true);
+    const todo = kind === 'delete' ? picked : picked.filter((r) => r.enabled !== (kind === 'on'));
+    const done = await Promise.allSettled(todo.map((r) => (kind === 'delete' ? api(`/game-news/rules/${r.id}`, 'DELETE') : api(`/game-news/rules/${r.id}`, 'PUT', { ...bodyOf(r), enabled: kind === 'on' }))));
+    const failed = done.filter((x) => x.status === 'rejected').length;
+    toast(failed ? t('gn.a.bulk.failed', { n: failed }) : t('gn.a.bulk.done', { n: todo.length }), failed ? 'err' : undefined);
+    setTicked([]);
+    setBulkBusy(false);
+    reload();
+  };
 
   const serverNames = (ids: number[]) => (ids.length ? servers.filter((s) => ids.includes(s.id)).map((s) => s.name).join(', ') || '—' : t('gn.a.allServers'));
   const bodyOf = (r: RuleInfo): RuleBody => {
@@ -168028,6 +168125,22 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
         </>
       )}
 
+      {rules.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-ui-lg bg-soft px-4 py-2.5">
+          <label className="flex items-center gap-2 font-bold">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={picked.length === rules.length} onChange={(e) => setTicked(e.target.checked ? rules.map((r) => r.id) : [])} />
+            {picked.length ? t('gn.a.bulk.picked', { n: picked.length }) : t('gn.a.bulk.all')}
+          </label>
+          {picked.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-2">
+              <button type="button" className="btn btn-soft btn-sm" disabled={bulkBusy || picked.every((r) => r.enabled)} onClick={() => void bulk('on')}>{t('gn.a.bulk.on')}</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={bulkBusy || picked.every((r) => !r.enabled)} onClick={() => void bulk('off')}>{t('gn.a.bulk.off')}</button>
+              <button type="button" className="btn btn-danger btn-sm" disabled={bulkBusy} onClick={() => void bulk('delete')}>{t('gn.a.del')}</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {rules.length > 0 && (
         <GroupedList
           storageKey="autorules"
@@ -168035,6 +168148,7 @@ export default function GameNewsRules({ servers, rules, timezone, reload }: { se
           groups={ruleGroups}
           render={(r) => (
             <div className="flex flex-wrap items-start gap-x-4 gap-y-2 px-5 py-4">
+              {rules.length > 1 && <input type="checkbox" className="mt-2 h-4 w-4 shrink-0 accent-brand" checked={ticked.includes(r.id)} onChange={(e) => setTicked((x) => (e.target.checked ? [...x, r.id] : x.filter((id) => id !== r.id)))} aria-label={t('gn.a.bulk.one', { name: r.name })} />}
               <Switch className="mt-1" checked={r.enabled} aria-label={`${r.name}: ${r.enabled ? t('gn.a.on') : t('gn.a.off')}`} onChange={(v) => void toggle(r, v)} />
               <div className="min-w-0 flex-1 basis-40">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -170805,6 +170919,7 @@ __COREGSM_EOF__
  * time of day, the streak of days in a row and the latest visits. Works without signing in on a public panel.
  */
 import { useEffect, useState } from 'react';
+import PlayerWeekCard from '../components/PlayerWeekCard';
 import { api, ApiError, type Achievement } from '../api';
 import { t, useI18n } from '../i18n';
 import { ActivityStrip } from '../components/profile/Stats';
@@ -170922,6 +171037,8 @@ export default function PlayerPage({ name }: { name: string }) {
           <div className={p.streak >= 3 ? 'is-hot' : ''}><dt>{t('d2.pl.streak')}</dt><dd>{p.streak >= 3 ? '🔥 ' : ''}{t('pf.stats.days', { n: p.streak })}</dd></div>
         </dl>
       </section>
+
+      <PlayerWeekCard name={p.name} byDay={p.byDay} achievements={p.achievements} />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="tile p-4 sm:p-5">
@@ -176061,6 +176178,45 @@ export function groupDays<T extends { ts: number }>(list: T[]): DayGroup<T>[] {
 
 /** the days a journal may be kept for (the choice of the administrator) */
 export const KEEP_DAYS = [7, 14, 30, 90, 180, 365] as const;
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/playerWeek.ts" << '__COREGSM_EOF__'
+/** «Моя неделя»: the last seven days of a player against the seven before them. */
+
+export interface DaySeconds { date: string; seconds: number }
+export interface AchievementLike { earned: boolean; earnedAt?: number | null }
+
+export interface Week {
+  hours: number;
+  /** hours of the seven days before */
+  before: number;
+  /** days with at least a minute in the game */
+  days: number;
+  best: { date: string; hours: number } | null;
+  achievements: number;
+  /** the hours of each of the seven days, oldest first */
+  bars: number[];
+}
+
+const DAY = 86_400_000;
+const hoursOf = (s: number) => Math.round((s / 3600) * 10) / 10;
+
+/** `byDay` is oldest first, as the card of a player gives it; null when nothing was played in these two weeks */
+export function weekOf(byDay: DaySeconds[], achievements: AchievementLike[] = [], now = Date.now()): Week | null {
+  const last = byDay.slice(-7);
+  const prev = byDay.slice(-14, -7);
+  const sum = (list: DaySeconds[]) => list.reduce((a, d) => a + d.seconds, 0);
+  if (sum(last) + sum(prev) < 60) return null;
+  const top = last.reduce<DaySeconds | null>((m, d) => (d.seconds >= 60 && (!m || d.seconds > m.seconds) ? d : m), null);
+  return {
+    hours: hoursOf(sum(last)),
+    before: hoursOf(sum(prev)),
+    days: last.filter((d) => d.seconds >= 60).length,
+    best: top ? { date: top.date, hours: hoursOf(top.seconds) } : null,
+    achievements: achievements.filter((a) => a.earned && a.earnedAt != null && now - a.earnedAt <= 7 * DAY).length,
+    bars: last.map((d) => hoursOf(d.seconds)),
+  };
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/profileLogic.ts" << '__COREGSM_EOF__'
