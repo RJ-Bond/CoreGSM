@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="74a944789c43"
+COREGSM_BUILD="dc1098253d63"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.77"
+COREGSM_VERSION="1.2.78"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -23979,6 +23979,7 @@ export const ERRORS = {
   appeal_message_bad: 'Напишите сообщение (до 1000 знаков)',
   appeal_decided: 'По этой заявке решение уже принято',
   appeal_thread_full: 'В переписке слишком много сообщений',
+  incident_not_found: 'Сбой не найден: возможно, история опросов за это время уже удалена',
   slug_format: 'Короткое имя: латиница, цифры и дефисы, от 2 до 40 знаков',
   slug_number: 'Короткое имя не может состоять только из цифр',
   slug_taken: 'Это короткое имя уже занято другим сервером',
@@ -40734,6 +40735,91 @@ router.get(
 );
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/incidentLogic.ts" << '__COREGSM_EOF__'
+/** The pure part of the page of one outage: the story in order and the points of the chart. */
+
+export interface IncidentCore { start: number; end: number | null; playersBefore: number; planned: boolean }
+export interface NoteLike { title: string; body: string; level: string; created_at: number; resolved_at: number | null }
+export interface ChangeRow { ts: number; kind: string; oldValue: string; newValue: string }
+
+export type TimelineItem =
+  | { ts: number; kind: 'down'; playersBefore: number; planned: boolean }
+  | { ts: number; kind: 'up'; minutes: number }
+  | { ts: number; kind: 'note'; title: string; body: string; level: string }
+  | { ts: number; kind: 'noteDone'; title: string }
+  | { ts: number; kind: 'change'; what: string; from: string; to: string };
+
+/** everything that happened around the outage, oldest first; at the same moment «down» comes first and «up» last */
+export function buildTimeline(i: IncidentCore, notes: NoteLike[], changes: ChangeRow[]): TimelineItem[] {
+  const out: TimelineItem[] = [{ ts: i.start, kind: 'down', playersBefore: i.playersBefore, planned: i.planned }];
+  for (const n of notes) {
+    out.push({ ts: n.created_at, kind: 'note', title: n.title, body: n.body, level: n.level });
+    if (n.resolved_at != null) out.push({ ts: n.resolved_at, kind: 'noteDone', title: n.title });
+  }
+  for (const c of changes) out.push({ ts: c.ts, kind: 'change', what: c.kind, from: c.oldValue, to: c.newValue });
+  if (i.end != null) out.push({ ts: i.end, kind: 'up', minutes: Math.max(1, Math.round((i.end - i.start) / 60_000)) });
+  const rank = (k: TimelineItem['kind']) => (k === 'down' ? 0 : k === 'up' ? 2 : 1);
+  return out.sort((a, b) => a.ts - b.ts || rank(a.kind) - rank(b.kind));
+}
+
+/** at most `max` points, evenly spread; a point where the server did not answer is never dropped in favour of a good one */
+export function samplePoints(rows: { ts: number; online: number; players: number }[], max: number): { ts: number; online: boolean; players: number }[] {
+  const shape = (r: { ts: number; online: number; players: number }) => ({ ts: r.ts, online: !!r.online, players: r.players });
+  if (rows.length <= max) return rows.map(shape);
+  const out: { ts: number; online: boolean; players: number }[] = [];
+  const size = rows.length / max;
+  for (let k = 0; k < max; k++) {
+    const part = rows.slice(Math.floor(k * size), Math.floor((k + 1) * size));
+    if (!part.length) continue;
+    out.push(shape(part.find((r) => !r.online) ?? part[part.length - 1]));
+  }
+  return out;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
+  cat > "$APP_DIR/core-backend/src/routes/incidentPage.ts" << '__COREGSM_EOF__'
+/**
+ * One outage with its own address: what happened, in order, and the players around it.
+ *   GET /api/status/incidents/:serverId/:start    (whoever may open the panel)
+ * The outage is taken from the poll history, so it is here as long as the history is kept.
+ */
+import express from 'express';
+import { db } from '../db.js';
+import { viewer, isAdmin } from '../security/auth.js';
+import { DAY, incidentsSince } from '../alerts/incidents.js';
+import { getServer, publicServer } from '../monitoring/serverData.js';
+import type { NoteRow } from '../alerts/statusNotesLogic.js';
+import { buildTimeline, samplePoints, type ChangeRow } from './incidentLogic.js';
+
+export const router = express.Router();
+const HOUR = 3_600_000;
+
+router.get('/api/status/incidents/:serverId/:start', viewer, (req, res) => {
+  const serverId = Number(req.params.serverId);
+  const start = Number(req.params.start);
+  const sv = Number.isInteger(serverId) && serverId > 0 && Number.isInteger(start) && start > 0 ? getServer(serverId) : null;
+  const now = Date.now();
+  const incident = sv ? incidentsSince(start - DAY, serverId, now).find((i) => i.start === start) : undefined;
+  if (!sv || !incident) return res.status(404).json({ error: 'Сбой не найден: возможно, история опросов за это время уже удалена' });
+  const shown = isAdmin(req) ? sv : publicServer(sv);
+  const end = incident.end ?? now;
+  const notes = db
+    .prepare('SELECT * FROM status_notes WHERE (server_id = ? OR server_id IS NULL) AND created_at <= ? AND (resolved_at IS NULL OR resolved_at >= ?) AND created_at >= ? ORDER BY created_at LIMIT 20')
+    .all(serverId, end + DAY, start - HOUR, start - DAY) as NoteRow[];
+  const changes = db
+    .prepare('SELECT ts, kind, old_value AS oldValue, new_value AS newValue FROM server_changes WHERE server_id = ? AND ts >= ? AND ts <= ? ORDER BY ts LIMIT 20')
+    .all(serverId, start - 6 * HOUR, end + 6 * HOUR) as ChangeRow[];
+  const history = db
+    .prepare('SELECT ts, online, players FROM history WHERE server_id = ? AND ts >= ? AND ts <= ? ORDER BY ts')
+    .all(serverId, start - HOUR, end + HOUR) as { ts: number; online: number; players: number }[];
+  res.set('Cache-Control', 'private, max-age=15').json({
+    incident: { ...incident, serverName: shown.name, game: shown.game },
+    timeline: buildTimeline(incident, notes, changes),
+    points: samplePoints(history, 240),
+  });
+});
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-backend/src/routes"
   cat > "$APP_DIR/core-backend/src/routes/internal.ts" << '__COREGSM_EOF__'
 /** Internal API of the bot (not exposed by nginx): configuration, status reports, bindings, embeds, cards. */
 import express from 'express';
@@ -40926,6 +41012,7 @@ import { completeOrder } from '../monitoring/serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { SLUG_RE, slugProblem } from './serverSlug.js';
+import { router as incidentRouter } from './incidentPage.js';
 import { publicNotes } from '../alerts/statusNotes.js';
 import { buildAtom, incidentEntry, type FeedEntry } from '../alerts/statusFeedLogic.js';
 
@@ -41335,6 +41422,9 @@ router.get('/s/:id', param('id'), (req, res) => {
 </body>
 </html>`);
 });
+
+// one outage with its own address
+router.use(incidentRouter);
 
 // ---------- status page data ----------
 router.get('/api/status', viewer, (req, res) => {
@@ -123828,7 +123918,7 @@ export default function App() {
           <PageFrame>
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
-            {page === 'status' && <StatusPage />}
+            {page === 'status' && <StatusPage sub={sub} />}
             {page === 'community' && <CommunityPage />}
             {page === 'bans' && <BansPage />}
             {page === 'about' && <AboutPage brand={access.brand.name} />}
@@ -151813,6 +151903,32 @@ const en: Record<keyof typeof ru, string> = {
   'st.inc.pastText': 'Down for {dur}: {from} – {to}',
   'st.inc.players': ' · {n} player was online| · {n} players were online',
   'st.hist': 'Outage history',
+  'inc.open': 'Open the page of the outage',
+  'inc.back': '← All statuses',
+  'inc.title': 'Outage: {name}',
+  'inc.titlePlanned': 'Planned work: {name}',
+  'inc.live': 'Going on now, {dur} already',
+  'inc.past': 'Lasted {dur}',
+  'inc.copy': 'Link to the outage',
+  'inc.from': 'Stopped answering',
+  'inc.to': 'Back',
+  'inc.still': 'not back yet',
+  'inc.before': 'Players before the outage',
+  'inc.chart': 'Players around the outage',
+  'inc.chartAlt': 'Players by poll, polls without an answer are red; the highest number is {n}',
+  'inc.chartPeak': 'up to {n} players',
+  'inc.story': 'What happened',
+  'inc.server': 'The page of {name}',
+  'inc.e.down': 'The server stopped answering',
+  'inc.e.planned': 'Planned work began',
+  'inc.e.players': 'Players before that: {n}',
+  'inc.e.up': 'The server answers again (down for {dur})',
+  'inc.e.noteDone': 'Resolved: {title}',
+  'inc.e.map': 'The map changed: {to}',
+  'inc.e.version': 'New version: {to}',
+  'inc.e.was': 'Was: {from}',
+  'inc.dur.hm': '{h} h {m} min',
+  'inc.dur.m': '{m} min',
   'st.hist.none': 'No outages in {d} days',
   'st.hist.noneText': 'Every server answered every poll.',
   'st.hist.more': 'Show more ({n})',
@@ -154516,6 +154632,7 @@ const errorsEn: Record<string, string> = {
   appeal_message_bad: 'Write a message (up to 1000 characters)',
   appeal_decided: 'The appeal is already decided',
   appeal_thread_full: 'There are too many messages in the conversation',
+  incident_not_found: 'The outage was not found: the poll history for that time may be gone already',
   slug_format: 'Short name: latin letters, digits and dashes, 2 to 40 characters',
   slug_number: 'A short name cannot be made of digits only',
   slug_taken: 'This short name is already taken by another server',
@@ -157339,6 +157456,32 @@ const ru = {
   'st.inc.pastText': 'Недоступен {dur}: {from} – {to}',
   'st.inc.players': ' · в игре было {n} игрок| · в игре было {n} игрока| · в игре было {n} игроков',
   'st.hist': 'История сбоев',
+  'inc.open': 'Открыть страницу сбоя',
+  'inc.back': '← Ко всем статусам',
+  'inc.title': 'Сбой: {name}',
+  'inc.titlePlanned': 'Плановые работы: {name}',
+  'inc.live': 'Идёт сейчас, уже {dur}',
+  'inc.past': 'Длился {dur}',
+  'inc.copy': 'Ссылка на сбой',
+  'inc.from': 'Перестал отвечать',
+  'inc.to': 'Вернулся',
+  'inc.still': 'ещё не вернулся',
+  'inc.before': 'Игроков перед сбоем',
+  'inc.chart': 'Игроки вокруг сбоя',
+  'inc.chartAlt': 'Игроки по опросам, красным отмечены опросы без ответа; наибольшее число {n}',
+  'inc.chartPeak': 'до {n} игроков',
+  'inc.story': 'Как это было',
+  'inc.server': 'Страница сервера {name}',
+  'inc.e.down': 'Сервер перестал отвечать',
+  'inc.e.planned': 'Начались плановые работы',
+  'inc.e.players': 'Перед этим было игроков: {n}',
+  'inc.e.up': 'Сервер снова отвечает (простой {dur})',
+  'inc.e.noteDone': 'Решено: {title}',
+  'inc.e.map': 'Сменилась карта: {to}',
+  'inc.e.version': 'Новая версия: {to}',
+  'inc.e.was': 'Было: {from}',
+  'inc.dur.hm': '{h} ч {m} мин',
+  'inc.dur.m': '{m} мин',
   'st.hist.none': 'За {d} дн. ни одного сбоя',
   'st.hist.noneText': 'Все серверы отвечали на каждый опрос.',
   'st.hist.more': 'Показать ещё ({n})',
@@ -168849,6 +168992,106 @@ export default function HealthPage() {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/Incident.tsx" << '__COREGSM_EOF__'
+import { useCallback, useState } from 'react';
+import { api, type StatusIncident } from '../api';
+import { t, useI18n } from '../i18n';
+import { CopyButton, GameAvatar, LoadError, PageHead, fmtDateTime, fmtTime, usePoll } from '../ui';
+import { IconError, IconInfo, IconOk } from '../icons';
+import '../styles/status.css';
+
+export type IncidentEvent =
+  | { ts: number; kind: 'down'; playersBefore: number; planned: boolean }
+  | { ts: number; kind: 'up'; minutes: number }
+  | { ts: number; kind: 'note'; title: string; body: string; level: string }
+  | { ts: number; kind: 'noteDone'; title: string }
+  | { ts: number; kind: 'change'; what: string; from: string; to: string };
+
+export interface IncidentData { incident: StatusIncident; timeline: IncidentEvent[]; points: { ts: number; online: boolean; players: number }[] }
+
+/** «1 ч 12 мин» / «12 мин» */
+export function lasted(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h ? t('inc.dur.hm', { h, m }) : t('inc.dur.m', { m: Math.max(1, m) });
+}
+
+/** the players around the outage: a column per poll, the polls without an answer are red and full height */
+function PlayersStrip({ points }: { points: IncidentData['points'] }) {
+  if (points.length < 2) return null;
+  const max = Math.max(1, ...points.map((p) => p.players));
+  const w = 100 / points.length;
+  return (
+    <figure className="panel p-4">
+      <figcaption className="mb-2 font-black">{t('inc.chart')}</figcaption>
+      <svg viewBox="0 0 100 32" preserveAspectRatio="none" className="h-32 w-full" role="img" aria-label={t('inc.chartAlt', { n: max })}>
+        {points.map((p, i) => (p.online
+          ? <rect key={p.ts} x={i * w} y={32 - Math.max(0.6, (p.players / max) * 32)} width={w * 0.8} height={Math.max(0.6, (p.players / max) * 32)} fill="rgb(var(--ok))" opacity="0.75" />
+          : <rect key={p.ts} x={i * w} y="0" width={w} height="32" fill="rgb(var(--bad))" opacity="0.35" />))}
+      </svg>
+      <div className="mt-1 flex justify-between text-xs font-bold text-mute"><span>{fmtTime(points[0].ts)}</span><span>{t('inc.chartPeak', { n: max })}</span><span>{fmtTime(points[points.length - 1].ts)}</span></div>
+    </figure>
+  );
+}
+
+function EventLine({ e }: { e: IncidentEvent }) {
+  const [tone, Ico] = e.kind === 'down' ? ['bg-badbg text-bad', IconError] as const : e.kind === 'up' || e.kind === 'noteDone' ? ['bg-okbg text-ok', IconOk] as const : ['bg-soft text-link', IconInfo] as const;
+  const title = e.kind === 'down' ? (e.planned ? t('inc.e.planned') : t('inc.e.down'))
+    : e.kind === 'up' ? t('inc.e.up', { dur: lasted(e.minutes) })
+    : e.kind === 'note' ? e.title
+    : e.kind === 'noteDone' ? t('inc.e.noteDone', { title: e.title })
+    : e.what === 'map' ? t('inc.e.map', { to: e.to }) : t('inc.e.version', { to: e.to });
+  const text = e.kind === 'down' && e.playersBefore > 0 ? t('inc.e.players', { n: e.playersBefore })
+    : e.kind === 'note' ? e.body
+    : e.kind === 'change' && e.from ? t('inc.e.was', { from: e.from }) : '';
+  return (
+    <li className="flex items-start gap-3">
+      <span aria-hidden className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${tone}`}><Ico size={18} /></span>
+      <div className="min-w-0 flex-1">
+        <p className="font-extrabold wrap-break-word">{title}</p>
+        {text && <p className="text-sm font-semibold text-mute wrap-break-word">{text}</p>}
+        <time className="text-xs font-bold text-mute" dateTime={new Date(e.ts).toISOString()}>{fmtDateTime(e.ts)}</time>
+      </div>
+    </li>
+  );
+}
+
+/** /status/incident/<server>/<start>: one outage with its own address, for a link in a chat */
+export default function IncidentPage({ serverId, start }: { serverId: number; start: number }) {
+  useI18n();
+  const [data, setData] = useState<IncidentData | null>(null);
+  const [error, setError] = useState('');
+  const load = useCallback(() => api<IncidentData>(`/status/incidents/${serverId}/${start}`).then((d) => { setData(d); setError(''); }).catch((e: Error) => setError(e.message)), [serverId, start]);
+  // while the outage goes on, the page follows it
+  usePoll(load, data && data.incident.end == null ? 30_000 : 300_000);
+
+  const back = <a className="btn btn-soft btn-sm" href="/status">{t('inc.back')}</a>;
+  if (error && !data) return <div className="space-y-4">{back}<LoadError error={error} onRetry={() => void load()} /></div>;
+  if (!data) return <div className="skeleton panel h-64" aria-busy="true" aria-label={t('st.loading')} />;
+  const i = data.incident;
+  const live = i.end == null;
+  return (
+    <div className="space-y-5">
+      <PageHead icon={<GameAvatar game={i.game} size={40} />} title={i.planned ? t('inc.titlePlanned', { name: i.serverName }) : t('inc.title', { name: i.serverName })} subtitle={live ? t('inc.live', { dur: lasted(i.minutes) }) : t('inc.past', { dur: lasted(i.minutes) })}>
+        {back}
+        <CopyButton text={`${window.location.origin}/status/incident/${i.serverId}/${i.start}`} label={t('inc.copy')} />
+      </PageHead>
+      <dl className="grid gap-3 sm:grid-cols-3">
+        <div className="panel p-4"><dt className="t-caption">{t('inc.from')}</dt><dd className="t-num text-lg">{fmtDateTime(i.start)}</dd></div>
+        <div className="panel p-4"><dt className="t-caption">{t('inc.to')}</dt><dd className={`t-num text-lg ${live ? 'text-bad' : ''}`}>{live ? t('inc.still') : fmtDateTime(i.end as number)}</dd></div>
+        <div className="panel p-4"><dt className="t-caption">{t('inc.before')}</dt><dd className="t-num text-lg">{i.playersBefore}</dd></div>
+      </dl>
+      <PlayersStrip points={data.points} />
+      <section className="panel p-5" aria-labelledby="inc-story">
+        <h2 id="inc-story" className="t-section mb-3">{t('inc.story')}</h2>
+        <ol className="space-y-4">{data.timeline.map((e) => <EventLine key={`${e.kind}-${e.ts}`} e={e} />)}</ol>
+      </section>
+      <p><a className="text-link hover:underline" href={`/servers/${i.serverId}`}>{t('inc.server', { name: i.serverName })}</a></p>
+    </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/Journal.tsx" << '__COREGSM_EOF__'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
@@ -173786,6 +174029,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
 import { CopyButton, Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import StatusSubscribe from '../components/StatusSubscribe';
+import IncidentPage from './Incident';
 import '../styles/status.css';
 
 const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
@@ -174068,7 +174312,7 @@ function IncidentItem({ i }: { i: StatusIncident }) {
       <GameAvatar game={i.game} size={36} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="min-w-0 font-extrabold [overflow-wrap:anywhere]">{i.serverName}</span>
+          <a href={`/status/incident/${i.serverId}/${i.start}`} className="min-w-0 font-extrabold [overflow-wrap:anywhere] hover:text-link hover:underline" title={t('inc.open')}>{i.serverName}</a>
           <span className={`st-inc-badge is-${kind}`}>{i.planned ? t('st.inc.planned') : live ? t('st.inc.live') : t('st.inc.done')}</span>
         </div>
         <p className="text-sm font-semibold text-mute">
@@ -174181,7 +174425,13 @@ function FollowCard() {
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
 
-export default function StatusPage() {
+export default function StatusPage({ sub = '' }: { sub?: string }) {
+  // «incident/<server>/<start>» is the page of one outage
+  const one = /^incident\/(\d+)\/(\d+)$/.exec(sub);
+  return one ? <IncidentPage serverId={Number(one[1])} start={Number(one[2])} /> : <StatusBoard />;
+}
+
+function StatusBoard() {
   useI18n();
   const { isAdmin } = useAuth();
   const [data, setData] = useState<StatusInfo | null>(null);
@@ -181320,7 +181570,7 @@ a.adm-reason:hover { filter: brightness(1.1); }
 /* the way in without opening the server: on the cover under the pointer or the keyboard, never on a touch screen */
 .srv-hover-actions { position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
 .srv-tile:hover .srv-hover-actions, .srv-tile:focus-within .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; }
-@media (hover: none) { .srv-hover-actions { display: none; } }
+@media (hover: none) { .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; } .srv-hover-actions > button { display: none; } }
 @media (prefers-reduced-motion: reduce) { .srv-hover-actions { transition: none; transform: none; } }
 /* the tile that closes an unfinished row: the picture on the left, the facts on the right, so it is not taller than its neighbours */
 @media (min-width: 640px) {

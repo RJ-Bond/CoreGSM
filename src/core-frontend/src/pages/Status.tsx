@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { api, type StatusDay, type StatusIncident, type StatusInfo, type StatusNote, type StatusServer } from '../api';
 import { CopyButton, Empty, ErrorLine, GameAvatar, LoadError, PageHead, SmoothArea, StatusPill, ago, fmtDateTime, fmtTime, usePoll } from '../ui';
 import StatusSubscribe from '../components/StatusSubscribe';
+import IncidentPage from './Incident';
 import '../styles/status.css';
 
 const loc = () => (getPrefs().lang === 'en' ? 'en-US' : 'ru-RU');
@@ -287,7 +288,7 @@ function IncidentItem({ i }: { i: StatusIncident }) {
       <GameAvatar game={i.game} size={36} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="min-w-0 font-extrabold [overflow-wrap:anywhere]">{i.serverName}</span>
+          <a href={`/status/incident/${i.serverId}/${i.start}`} className="min-w-0 font-extrabold [overflow-wrap:anywhere] hover:text-link hover:underline" title={t('inc.open')}>{i.serverName}</a>
           <span className={`st-inc-badge is-${kind}`}>{i.planned ? t('st.inc.planned') : live ? t('st.inc.live') : t('st.inc.done')}</span>
         </div>
         <p className="text-sm font-semibold text-mute">
@@ -400,7 +401,13 @@ function FollowCard() {
 /** Public status page: the state now, 30 days of availability per server and the incidents behind it. */
 const IconPulse = () => <Icon size={22}><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></Icon>;
 
-export default function StatusPage() {
+export default function StatusPage({ sub = '' }: { sub?: string }) {
+  // «incident/<server>/<start>» is the page of one outage
+  const one = /^incident\/(\d+)\/(\d+)$/.exec(sub);
+  return one ? <IncidentPage serverId={Number(one[1])} start={Number(one[2])} /> : <StatusBoard />;
+}
+
+function StatusBoard() {
   useI18n();
   const { isAdmin } = useAuth();
   const [data, setData] = useState<StatusInfo | null>(null);

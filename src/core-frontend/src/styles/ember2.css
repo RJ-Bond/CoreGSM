@@ -231,7 +231,7 @@ a.adm-reason:hover { filter: brightness(1.1); }
 /* the way in without opening the server: on the cover under the pointer or the keyboard, never on a touch screen */
 .srv-hover-actions { position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
 .srv-tile:hover .srv-hover-actions, .srv-tile:focus-within .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; }
-@media (hover: none) { .srv-hover-actions { display: none; } }
+@media (hover: none) { .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; } .srv-hover-actions > button { display: none; } }
 @media (prefers-reduced-motion: reduce) { .srv-hover-actions { transition: none; transform: none; } }
 /* the tile that closes an unfinished row: the picture on the left, the facts on the right, so it is not taller than its neighbours */
 @media (min-width: 640px) {

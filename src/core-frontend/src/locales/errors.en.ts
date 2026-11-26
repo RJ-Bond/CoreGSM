@@ -25,6 +25,7 @@ const errorsEn: Record<string, string> = {
   appeal_message_bad: 'Write a message (up to 1000 characters)',
   appeal_decided: 'The appeal is already decided',
   appeal_thread_full: 'There are too many messages in the conversation',
+  incident_not_found: 'The outage was not found: the poll history for that time may be gone already',
   slug_format: 'Short name: latin letters, digits and dashes, 2 to 40 characters',
   slug_number: 'A short name cannot be made of digits only',
   slug_taken: 'This short name is already taken by another server',

@@ -20,6 +20,7 @@ import { completeOrder } from '../monitoring/serverOrderLogic.js';
 import { getServer, publicServer, SELECT_SERVERS, SERVER_ORDER, serialize, type ServerJoin } from '../monitoring/serverData.js';
 import { baseOf, brand, publicBase } from '../admin/site.js';
 import { SLUG_RE, slugProblem } from './serverSlug.js';
+import { router as incidentRouter } from './incidentPage.js';
 import { publicNotes } from '../alerts/statusNotes.js';
 import { buildAtom, incidentEntry, type FeedEntry } from '../alerts/statusFeedLogic.js';
 
@@ -429,6 +430,9 @@ router.get('/s/:id', param('id'), (req, res) => {
 </body>
 </html>`);
 });
+
+// one outage with its own address
+router.use(incidentRouter);
 
 // ---------- status page data ----------
 router.get('/api/status', viewer, (req, res) => {

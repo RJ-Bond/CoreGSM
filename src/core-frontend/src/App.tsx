@@ -504,7 +504,7 @@ export default function App() {
           <PageFrame>
             {page === 'servers' && <ServersPage sub={sub} />}
             {page === 'news' && <NewsFeed sub={sub} />}
-            {page === 'status' && <StatusPage />}
+            {page === 'status' && <StatusPage sub={sub} />}
             {page === 'community' && <CommunityPage />}
             {page === 'bans' && <BansPage />}
             {page === 'about' && <AboutPage brand={access.brand.name} />}
