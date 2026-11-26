@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b97958f9fcc2"
+COREGSM_BUILD="39c271d3353d"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.80"
+COREGSM_VERSION="1.2.81"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -55562,7 +55562,7 @@ __COREGSM_EOF__
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "coverage": "vitest run --coverage",
+    "coverage": "vitest run --coverage --exclude \"**/pagesSmoke.test.tsx\" --exclude \"**/node_modules/**\" && vitest run pagesSmoke",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "lint:ratchet": "node scripts/lint-ratchet.mjs"
