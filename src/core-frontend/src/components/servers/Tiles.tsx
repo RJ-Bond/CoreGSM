@@ -126,6 +126,7 @@ export function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, re
 
         {s.online ? (
           <>
+            <div className="h3-figs">
             <div className={`h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1 ${s.players === 0 ? 'is-zero' : ''}`}>
               <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
               <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
@@ -135,13 +136,12 @@ export function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, re
               {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
               {peak && <span className="hero-peak" title={t('srv.hero.peakTip', { n: peak.value })}>{peak.now ? t('srv.hero.peakNow') : t('srv.hero.peakAt', { time: fmtTime(peak.at), h: peak.hoursAhead })}</span>}
             </div>
-            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-            <PlayerNames names={s.playerNames ?? []} max={4} onDark />
-            {play && (
-              <div className="h3-cta">
-                <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>
-              </div>
-            )}
+            </div>
+            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark slots={false} />
+            <div className="h3-row">
+              {play && <a className="btn h3-play" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
+              <PlayerNames names={s.playerNames ?? []} max={4} onDark />
+            </div>
           </>
         ) : (
           // a server that is down: what is wrong and since when, instead of the figures
@@ -283,10 +283,6 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
     try { await api('/maintenance', 'POST', { serverId: s.id, name: t('srv.planned.name'), startTs: now, endTs: now + 3_600_000, repeat: 'none' }); toast(t('srv.planned.done')); } catch (err) { toast(errText(err), 'err'); }
     setPolling(false);
   };
-  const copyAddr = async (e: MouseEvent<HTMLElement>) => {
-    e.stopPropagation();
-    try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
-  };
   return (
     <article
       {...dnd}
@@ -307,9 +303,9 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
         </div>
         {/* the way in without opening the server: shown under the pointer (and by the keyboard), not on a phone */}
         <div className="srv-hover-actions">
-          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
-          <button type="button" className="btn btn-glass btn-sm" onClick={(e) => void copyAddr(e)}>{t('srv.tile.copy')}</button>
+          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} title={play.label} onClick={(e) => e.stopPropagation()}>{t('home.play')}</a>}
         </div>
+        {s.online && <CapacityBar className="srv-cover-cap" players={s.players} max={s.maxPlayers} color="rgb(var(--brand))" showPct={false} slots={false} onDark />}
       </div>
 
       <div className="px-1.5">
@@ -332,7 +328,6 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{(s.playerNames?.length ?? 0) === 1 ? <span className="srv-who-one">{s.playerNames[0]}</span> : <PlayerStack names={s.playerNames ?? []} />}</button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
@@ -356,7 +351,7 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <AddrCopy address={s.address} className="min-w-0 font-mono" split />
+        <AddrCopy address={s.address} className="min-w-0 font-mono" reveal />
         <span className="flex shrink-0 items-center gap-2">
           {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}><small className="srv-up-l">{t('srv.up.label')}</small> {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}

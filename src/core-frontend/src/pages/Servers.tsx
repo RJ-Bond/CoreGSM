@@ -8,13 +8,15 @@ import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks'
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import LiveBadge from '../components/LiveBadge';
-import { ErrorLine, LoadError, IconServers, PageHead, usePoll, toast, navigate, routeQuery } from '../ui';
-import { t, useI18n, type TKey } from '../i18n';
+import { ErrorLine, LoadError, usePoll, toast, navigate, routeQuery } from '../ui';
+import { getPrefs, t, useI18n, type TKey } from '../i18n';
 import { ListSkeleton, NoFavsState, NoMatchState, NoServersState, TilesSkeleton, useServerReactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
 import { PulseStrip } from '../components/servers/PulseStrip';
+import { DownStrip, HeroRow, QuietList } from '../components/servers/HomeGroups';
+import { groupHome } from '../components/servers/homeLogic';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
 import { needsAttention, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
@@ -120,6 +122,12 @@ function ScrollTop() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m18 15-6-6-6 6" /></svg>
     </button>
   );
+}
+
+/** «Четверг, 26 ноября» under the title of the home page */
+function today(): string {
+  const text = new Date().toLocaleDateString(getPrefs().lang === 'en' ? 'en-GB' : 'ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function greeting(name: string): string {
@@ -266,14 +274,7 @@ function ServerList() {
   const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id) || Number(a.online && a.players === 0) - Number(b.online && b.players === 0) || b.players - a.players);
   // Ember: the favourites are pinned above the rest, each group with its own heading
   const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
-  const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
-  const secHead = (i: number) => {
-    if (!pinFavs) return null;
-    const f = favs.includes(restShown[i].id);
-    if (i === 0 && f) return <h2 className="srv-grp">{t('srv.fav.title')}</h2>;
-    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-grp">{t('srv.fav.rest')}</h2>;
-    return null;
-  };
+  const pinned = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
   const offlineCount = servers.filter((s) => !s.online).length;
   const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -307,6 +308,17 @@ function ServerList() {
     : undefined;
 
   const open = (s: Server) => { navigate(`/servers/${s.id}`); };
+
+  // on the full list: a card for the busy ones, a red line for the silent ones, compact rows for the empty ones
+  const groups = groupHome(pinned, favs, effView === 'tiles' && effFilter === 'all' && !selOn, online.length > 0);
+  const restShown = groups.cards;
+  const secHead = (i: number) => {
+    if (!pinFavs) return null;
+    const f = favs.includes(restShown[i].id);
+    if (i === 0 && f) return <h2 className="srv-grp">{t('srv.fav.title')}</h2>;
+    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-grp">{t('srv.fav.rest')}</h2>;
+    return null;
+  };
 
   const Tile = phone ? PhoneRow : SmallTile;
   // a tile is dragged onto another one: the visitor's own order of the servers (kept in this browser)
@@ -361,20 +373,18 @@ function ServerList() {
   const orphan = effView === 'tiles' && effFilter === 'all' && !phone ? lonelyTile(restShown.map((x) => x.id), favs, cols) : null;
   return (
     <div className="space-y-5">
-      <PageHead
-        title={ember && me ? greeting(me.username) : t('nav.servers')}
-        subtitle={ember ? undefined : me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
-        icon={<IconServers />}
-      >
+      <header className="home-head">
+        <h1>{ember && me ? greeting(me.username) : t('nav.servers')}</h1>
+        <p className="home-head-sub">{ember ? today() : me ? `${greeting(me.username)}. ${liveLine}` : liveLine}</p>
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
-          <HomeBlocksMenu blocks={home} onChange={setHome} heroMode={heroMode} onHeroMode={setHeroMode} />
+          <HomeBlocksMenu blocks={home} onChange={setHome} heroMode={heroMode} onHeroMode={setHeroMode} {...(effView === 'tiles' && !phone ? { size, onSize: setSize } : {})} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
-      </PageHead>
+      </header>
 
       {loaded && servers.length > 0 && home.pulse && (
-        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} />
+        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} quietDown={groups.down.length > 0} />
       )}
 
 
@@ -398,13 +408,6 @@ function ServerList() {
               <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title={t('d2.srv.selectTitle')}>
                 {selOn ? t('d2.srv.cancelSelect') : t('d2.srv.select')}
               </button>
-            )}
-            {effView === 'tiles' && (
-              <div className="seg max-sm:hidden" role="group" aria-label={t('d2.srv.tileSize')}>
-                {([['s', 'S', 'd2.srv.sz.s'], ['m', 'M', 'd2.srv.sz.m'], ['l', 'L', 'd2.srv.sz.l']] as const).map(([id, mark, label]) => (
-                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}><span className="sz-mark" data-sz={id} aria-hidden>{mark}<i /><i /><i /><i /></span></button>
-                ))}
-              </div>
             )}
             <div className="seg" role="group" aria-label={t('d2.news.viewLabel')}>
               {([['tiles', 'd2.srv.v.tiles'], ['list', 'd2.news.viewList'], ['chart', 'd2.srv.v.chart']] as [ServersView, TKey][]).map(([id, label]) => (
@@ -456,10 +459,16 @@ function ServerList() {
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in srv-grid" data-size={size} ref={gridRef}>
-                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
-                {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
-              </div>
+              <>
+                <DownStrip servers={groups.down} since={downSince} />
+                <div className="fade-in srv-grid" data-size={size} ref={gridRef}>
+                  {hero && (phone && !selOn
+                    ? <HeroRow key={hero.id} s={hero} label={heroReason && heroReason !== 'attention' ? t(`srv.hero.${heroReason}` as const) : ''} />
+                    : <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />)}
+                  {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
+                </div>
+                <QuietList servers={groups.quiet} />
+              </>
             )}
           </div>
           {home.news && <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />}

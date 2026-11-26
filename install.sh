@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="7b406f3eb0eb"
+COREGSM_BUILD="93b1db5c860e"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.82"
+COREGSM_VERSION="1.2.84"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -144420,6 +144420,7 @@ import { t, useI18n } from '../../i18n';
 import { HERO_MODES, type HeroMode } from './heroLogic';
 
 /** which blocks of the servers page are shown: remembered in this browser; both are on until the person turns one off */
+export type TileSize = 's' | 'm' | 'l';
 export interface HomeBlocks { pulse: boolean; news: boolean }
 const KEY = 'coregsm_home_blocks';
 const ALL_ON: HomeBlocks = { pulse: true, news: true };
@@ -144444,7 +144445,7 @@ export function useHomeBlocks(): [HomeBlocks, (patch: Partial<HomeBlocks>) => vo
 }
 
 /** «Customise»: a small menu with a switch for every block of the page; closes on Esc and on a click outside */
-export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void; heroMode?: HeroMode; onHeroMode?: (m: HeroMode) => void }) {
+export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode, size, onSize }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void; heroMode?: HeroMode; onHeroMode?: (m: HeroMode) => void; size?: TileSize; onSize?: (s: TileSize) => void }) {
   useI18n();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -144468,6 +144469,17 @@ export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode }: { blo
               <span>{label}</span>
             </label>
           ))}
+          {size && onSize && (
+            <div className="home-blocks-hero" role="radiogroup" aria-label={t('d2.srv.tileSize')}>
+              <p className="home-blocks-h">{t('d2.srv.tileSize')}</p>
+              {(['s', 'm', 'l'] as const).map((id) => (
+                <label key={id} className="home-blocks-row">
+                  <input type="radio" name="tile-size" className="srv-check" checked={size === id} onChange={() => onSize(id)} />
+                  <span>{t(`d2.srv.sz.${id}` as const)}</span>
+                </label>
+              ))}
+            </div>
+          )}
           {heroMode && onHeroMode && (
             <div className="home-blocks-hero" role="radiogroup" aria-label={t('home.hero')}>
               <p className="home-blocks-h">{t('home.hero')}</p>
@@ -144482,6 +144494,103 @@ export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode }: { blo
         </div>
       )}
     </div>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/HomeGroups.tsx" << '__COREGSM_EOF__'
+import { useState } from 'react';
+import { api, type Server } from '../../api';
+import { useAuth } from '../../auth';
+import { gameLabel } from '../../games';
+import { connectGuide } from '../../connectGuides';
+import { t, useI18n } from '../../i18n';
+import { GameAvatar, ago, errText, toast } from '../../ui';
+import { pingTone, TONE_TEXT } from '../server/helpers';
+import { CapacityBar, durText, useQuickLongPress } from './serverUi';
+import { QuickMenu } from './QuickMenu';
+
+/** the servers that do not answer: one narrow red line each, above the cards */
+export function DownStrip({ servers, since }: { servers: Server[]; since: Map<number, number> }) {
+  useI18n();
+  const { isAdmin } = useAuth();
+  const [busy, setBusy] = useState<number | null>(null);
+  const poll = async (id: number) => {
+    setBusy(id);
+    try { await api(`/servers/${id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (e) { toast(errText(e), 'err'); }
+    setBusy(null);
+  };
+  if (servers.length === 0) return null;
+  return (
+    <ul className="home-down" aria-label={t('home.down.label')}>
+      {servers.map((s) => {
+        const from = since.get(s.id);
+        return (
+          <li key={s.id} className="home-down-row">
+            <span className="home-down-dot" aria-hidden />
+            <GameAvatar game={s.game} size={28} />
+            <p className="min-w-0 flex-1">
+              <a href={`/servers/${s.id}`} className="font-extrabold hover:underline">{s.name}</a>{' '}
+              <span className="font-semibold">{from ? t('home.down.for', { d: durText(Date.now() - from) }) : t('home.down.noReply', { ago: ago(s.updatedAt) })}</span>
+            </p>
+            {isAdmin && <button type="button" className="btn btn-soft btn-sm" disabled={busy === s.id} onClick={() => void poll(s.id)}>{busy === s.id ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+            <QuickMenu s={s} />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** the servers that answer with nobody on: compact rows, so the full ones keep the room */
+export function QuietList({ servers }: { servers: Server[] }) {
+  useI18n();
+  if (servers.length === 0) return null;
+  return (
+    <section className="home-quiet" aria-label={t('home.quiet.title')}>
+      <h2 className="srv-grp">{t('home.quiet.title')} <span className="text-mute">{servers.length}</span></h2>
+      <ul className="home-quiet-list">
+        {servers.map((s) => (
+          <li key={s.id} className="home-quiet-row">
+            <GameAvatar game={s.game} size={32} />
+            <span className="min-w-0 flex-1">
+              <a href={`/servers/${s.id}`} className="home-quiet-link block truncate font-extrabold">{s.name}</a>
+              <span className="block truncate text-xs font-semibold text-mute">{gameLabel(s.game)}</span>
+            </span>
+            {s.ping != null && <span className={`shrink-0 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}>{t('d2.bot.ms', { n: s.ping })}</span>}
+            <span className="shrink-0 text-fs-sm font-bold tabular-nums text-mute">0/{s.maxPlayers}</span>
+            <span className="relative z-10 shrink-0"><QuickMenu s={s} /></span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** the big card of a phone: one tall row with the name, the places and the way in */
+export function HeroRow({ s, label }: { s: Server; label: string }) {
+  useI18n();
+  const play = connectGuide(s.game, s.address).link;
+  const { swallow, ...lp } = useQuickLongPress();
+  return (
+    // the click that ends a long touch must not open the server
+    <article {...lp} className="home-hero-row" onClickCapture={(e) => { if (swallow()) { e.preventDefault(); e.stopPropagation(); } }}>
+      <GameAvatar game={s.game} size={48} />
+      <div className="min-w-0 flex-1">
+        {label && <span className="home-hero-label">{label}</span>}
+        <h2 className="line-clamp-2 wrap-break-word text-fs-lg font-extrabold leading-tight" title={s.name}>
+          <a href={`/servers/${s.id}`} className="home-quiet-link">{s.name}</a>
+        </h2>
+        {s.online
+          ? <CapacityBar className="mt-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--brand))" showPct={false} slots={false} />
+          : <p className="text-fs-sm font-semibold text-bad">{t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) })}</p>}
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1.5">
+        <b className="text-fs-xl font-extrabold leading-none tabular-nums">{s.online ? <>{s.players}<span className="text-fs-sm text-mute">/{s.maxPlayers}</span></> : '–'}</b>
+        {s.online && play && <a className="btn btn-sm relative z-10" href={play.href}>{t('home.play')}</a>}
+      </div>
+      <span className="srv-row-qm" aria-hidden><QuickMenu s={s} /></span>
+    </article>
   );
 }
 __COREGSM_EOF__
@@ -144574,8 +144683,14 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   );
 }
 
-export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void }) {
+const OPEN_KEY = 'coregsm_pulse_open';
+
+/** `quietDown`: the silent servers are named in their own lines under the strip, so the strip does not repeat them */
+export function PulseStrip({ servers, overview, uptime, now, onOpen, quietDown = false }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void; quietDown?: boolean }) {
   useI18n();
+  // one narrow strip; opened, it shows the big chart (remembered in this browser)
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem(OPEN_KEY) === '1'; } catch { return false; } });
+  const toggle = () => setOpen((v) => { try { localStorage.setItem(OPEN_KEY, v ? '0' : '1'); } catch { /* not remembered */ } return !v; });
   const [{ ember }] = useAppearance();
   const { state, problems } = pulseOf(servers);
   const online = servers.filter((s) => s.online);
@@ -144629,8 +144744,12 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
           <span className="pulse-alert-go" aria-hidden>→</span>
         </a>
       )}
-    <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
-      {ember && (
+    <section className={`pulse pulse-${state} ${open ? 'is-open' : 'is-compact'}`} aria-label={t('srv.pulse.label')}>
+      <button type="button" className="pulse-line" aria-expanded={open} onClick={toggle}>
+        <b>{t('srv.pulse.line', { n: players, s: online.length, total: servers.length })}</b>
+        <span aria-hidden className="pulse-chev">▾</span>
+      </button>
+      {ember && !(quietDown && state === 'bad') && (
         <div className="pulse-state" role="status">
           <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
           {alert && first ? (
@@ -144675,6 +144794,7 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </div>
       </dl>
       <PlayersChart data={overview} now={now} />
+      <button type="button" className="pulse-toggle" aria-expanded={open} onClick={toggle} title={t(open ? 'srv.pulse.less' : 'srv.pulse.more.btn')} aria-label={t(open ? 'srv.pulse.less' : 'srv.pulse.more.btn')}><span aria-hidden>▾</span></button>
     </section>
     </div>
   );
@@ -145114,6 +145234,7 @@ export function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, re
 
         {s.online ? (
           <>
+            <div className="h3-figs">
             <div className={`h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1 ${s.players === 0 ? 'is-zero' : ''}`}>
               <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
               <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
@@ -145123,13 +145244,12 @@ export function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, re
               {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
               {peak && <span className="hero-peak" title={t('srv.hero.peakTip', { n: peak.value })}>{peak.now ? t('srv.hero.peakNow') : t('srv.hero.peakAt', { time: fmtTime(peak.at), h: peak.hoursAhead })}</span>}
             </div>
-            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-            <PlayerNames names={s.playerNames ?? []} max={4} onDark />
-            {play && (
-              <div className="h3-cta">
-                <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>
-              </div>
-            )}
+            </div>
+            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark slots={false} />
+            <div className="h3-row">
+              {play && <a className="btn h3-play" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
+              <PlayerNames names={s.playerNames ?? []} max={4} onDark />
+            </div>
           </>
         ) : (
           // a server that is down: what is wrong and since when, instead of the figures
@@ -145271,10 +145391,6 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
     try { await api('/maintenance', 'POST', { serverId: s.id, name: t('srv.planned.name'), startTs: now, endTs: now + 3_600_000, repeat: 'none' }); toast(t('srv.planned.done')); } catch (err) { toast(errText(err), 'err'); }
     setPolling(false);
   };
-  const copyAddr = async (e: MouseEvent<HTMLElement>) => {
-    e.stopPropagation();
-    try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
-  };
   return (
     <article
       {...dnd}
@@ -145295,9 +145411,9 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
         </div>
         {/* the way in without opening the server: shown under the pointer (and by the keyboard), not on a phone */}
         <div className="srv-hover-actions">
-          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
-          <button type="button" className="btn btn-glass btn-sm" onClick={(e) => void copyAddr(e)}>{t('srv.tile.copy')}</button>
+          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} title={play.label} onClick={(e) => e.stopPropagation()}>{t('home.play')}</a>}
         </div>
+        {s.online && <CapacityBar className="srv-cover-cap" players={s.players} max={s.maxPlayers} color="rgb(var(--brand))" showPct={false} slots={false} onDark />}
       </div>
 
       <div className="px-1.5">
@@ -145320,7 +145436,6 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
             {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{(s.playerNames?.length ?? 0) === 1 ? <span className="srv-who-one">{s.playerNames[0]}</span> : <PlayerStack names={s.playerNames ?? []} />}</button>}
             <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
           </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
           {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
           {s.players === 0
             ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
@@ -145344,7 +145459,7 @@ export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, down
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <AddrCopy address={s.address} className="min-w-0 font-mono" split />
+        <AddrCopy address={s.address} className="min-w-0 font-mono" reveal />
         <span className="flex shrink-0 items-center gap-2">
           {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}><small className="srv-up-l">{t('srv.up.label')}</small> {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
           {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
@@ -145766,6 +145881,32 @@ export function pickHeroBy(servers: Server[], favs: number[], mode: HeroMode): {
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/homeLogic.ts" << '__COREGSM_EOF__'
+/** The home page: which servers get a card, which are named in a strip because they do not answer, and which wait empty. */
+import type { Server } from '../../api';
+
+export interface HomeGroups {
+  /** a card each */
+  cards: Server[];
+  /** do not answer (and are not in maintenance): one narrow red line each, above the cards */
+  down: Server[];
+  /** answer, but nobody is on: compact rows under the cards */
+  quiet: Server[];
+}
+
+/**
+ * `rest` is every server but the big card, in the order of the page. A favourite keeps its card even when empty.
+ * With nobody online there is nothing to push aside, and with `split` off (a filter, the selection mode) everything is a card.
+ */
+export function groupHome(rest: Server[], favs: number[], split: boolean, anyOnline: boolean): HomeGroups {
+  if (!split || !anyOnline) return { cards: rest, down: [], quiet: [] };
+  const down = rest.filter((s) => s.hasStatus && !s.online && !s.maintenance);
+  const quiet = rest.filter((s) => s.online && s.players === 0 && !s.maintenance && !favs.includes(s.id));
+  const aside = new Set([...down, ...quiet].map((s) => s.id));
+  return { cards: rest.filter((s) => !aside.has(s.id)), down, quiet };
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
   cat > "$APP_DIR/core-frontend/src/components/servers/overviewLogic.ts" << '__COREGSM_EOF__'
 // Pure logic of the main page: the hero pick, the state of the pulse strip. Covered by tests.
 import type { Server } from '../../api';
@@ -146122,7 +146263,7 @@ export function ListSkeleton() {
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
 const hostOf = (address: string): string => address.replace(/:\d+$/, '');
 
-export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
+export function AddrCopy({ address, className = '', split = false, reveal = false }: { address: string; className?: string; split?: boolean; reveal?: boolean }) {
   useI18n();
   const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
     e.stopPropagation();
@@ -146131,7 +146272,10 @@ export function AddrCopy({ address, className = '', split = false }: { address: 
   };
   return (
     <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
-      {split && /:\d+$/.test(address)
+      {reveal
+        // a card says what the press does; the address itself shows under the pointer and by the keyboard
+        ? <span className={`${className} srv-addr-reveal`}><span className="srv-addr-say">{t('srv.addr.copy')}</span><span className="srv-addr-full">{address}</span></span>
+        : split && /:\d+$/.test(address)
         ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host"><span className="srv-addr-head">{hostOf(address).slice(0, -7)}</span><span className="srv-addr-tail">{hostOf(address).slice(-7)}</span></span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
         : <span className={className}>{address}</span>}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
@@ -150077,6 +150221,14 @@ const en: Record<keyof typeof ru, string> = {
   // ---- shared ----
   'common.cancel': 'Cancel',
   'home.customize': 'Customise',
+  'home.down.label': 'Servers that do not answer',
+  'home.down.for': 'has not answered for {d}',
+  'home.down.noReply': 'does not answer, last asked {ago}',
+  'home.quiet.title': 'Nobody on right now',
+  'home.play': 'Play',
+  'srv.pulse.line': '{n} playing · {s} of {total} online',
+  'srv.pulse.less': 'Fold the summary',
+  'srv.pulse.more.btn': 'Open the chart',
   'home.hero': 'Big card',
   'home.hero.busiest': 'The busiest',
   'home.hero.fullest': 'The fullest',
@@ -155652,6 +155804,14 @@ const ru = {
   // ---- shared ----
   'common.cancel': 'Отмена',
   'home.customize': 'Настроить',
+  'home.down.label': 'Серверы, которые не отвечают',
+  'home.down.for': 'не отвечает {d}',
+  'home.down.noReply': 'не отвечает, последний опрос {ago}',
+  'home.quiet.title': 'Сейчас никого',
+  'home.play': 'Играть',
+  'srv.pulse.line': '{n} в игре · онлайн {s} из {total}',
+  'srv.pulse.less': 'Свернуть сводку',
+  'srv.pulse.more.btn': 'Развернуть график',
   'home.hero': 'Большая карточка',
   'home.hero.busiest': 'Самый загруженный',
   'home.hero.fullest': 'Самый заполненный',
@@ -173737,13 +173897,15 @@ import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks'
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
 import LiveBadge from '../components/LiveBadge';
-import { ErrorLine, LoadError, IconServers, PageHead, usePoll, toast, navigate, routeQuery } from '../ui';
-import { t, useI18n, type TKey } from '../i18n';
+import { ErrorLine, LoadError, usePoll, toast, navigate, routeQuery } from '../ui';
+import { getPrefs, t, useI18n, type TKey } from '../i18n';
 import { ListSkeleton, NoFavsState, NoMatchState, NoServersState, TilesSkeleton, useServerReactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
 import { PulseStrip } from '../components/servers/PulseStrip';
+import { DownStrip, HeroRow, QuietList } from '../components/servers/HomeGroups';
+import { groupHome } from '../components/servers/homeLogic';
 import { WhatsNew, useWhatsNewOpen } from '../components/servers/WhatsNew';
 import { BulkBar } from '../components/servers/BulkBar';
 import { needsAttention, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
@@ -173849,6 +174011,12 @@ function ScrollTop() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m18 15-6-6-6 6" /></svg>
     </button>
   );
+}
+
+/** «Четверг, 26 ноября» under the title of the home page */
+function today(): string {
+  const text = new Date().toLocaleDateString(getPrefs().lang === 'en' ? 'en-GB' : 'ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function greeting(name: string): string {
@@ -173995,14 +174163,7 @@ function ServerList() {
   const rest = sorted.filter((s) => s.id !== hero?.id).sort((a, b) => Number(needsAttention(b)) - Number(needsAttention(a)) || orderIdx(a.id) - orderIdx(b.id) || Number(a.online && a.players === 0) - Number(b.online && b.players === 0) || b.players - a.players);
   // Ember: the favourites are pinned above the rest, each group with its own heading
   const pinFavs = ember && !!me && rest.some((s) => favs.includes(s.id)) && rest.some((s) => !favs.includes(s.id));
-  const restShown = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
-  const secHead = (i: number) => {
-    if (!pinFavs) return null;
-    const f = favs.includes(restShown[i].id);
-    if (i === 0 && f) return <h2 className="srv-grp">{t('srv.fav.title')}</h2>;
-    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-grp">{t('srv.fav.rest')}</h2>;
-    return null;
-  };
+  const pinned = pinFavs ? [...rest].sort((a, b) => Number(favs.includes(b.id)) - Number(favs.includes(a.id))) : rest;
   const offlineCount = servers.filter((s) => !s.online).length;
   const liveLine = servers.length ? t('srv.sub.live', { n: online.reduce((a, s) => a + s.players, 0), s: online.length, total: servers.length }) : t('srv.sub.empty');
   const favCount = servers.filter((s) => favs.includes(s.id)).length;
@@ -174036,6 +174197,17 @@ function ServerList() {
     : undefined;
 
   const open = (s: Server) => { navigate(`/servers/${s.id}`); };
+
+  // on the full list: a card for the busy ones, a red line for the silent ones, compact rows for the empty ones
+  const groups = groupHome(pinned, favs, effView === 'tiles' && effFilter === 'all' && !selOn, online.length > 0);
+  const restShown = groups.cards;
+  const secHead = (i: number) => {
+    if (!pinFavs) return null;
+    const f = favs.includes(restShown[i].id);
+    if (i === 0 && f) return <h2 className="srv-grp">{t('srv.fav.title')}</h2>;
+    if (!f && (i === 0 || favs.includes(restShown[i - 1].id))) return <h2 className="srv-grp">{t('srv.fav.rest')}</h2>;
+    return null;
+  };
 
   const Tile = phone ? PhoneRow : SmallTile;
   // a tile is dragged onto another one: the visitor's own order of the servers (kept in this browser)
@@ -174090,20 +174262,18 @@ function ServerList() {
   const orphan = effView === 'tiles' && effFilter === 'all' && !phone ? lonelyTile(restShown.map((x) => x.id), favs, cols) : null;
   return (
     <div className="space-y-5">
-      <PageHead
-        title={ember && me ? greeting(me.username) : t('nav.servers')}
-        subtitle={ember ? undefined : me ? `${greeting(me.username)}. ${liveLine}` : liveLine}
-        icon={<IconServers />}
-      >
+      <header className="home-head">
+        <h1>{ember && me ? greeting(me.username) : t('nav.servers')}</h1>
+        <p className="home-head-sub">{ember ? today() : me ? `${greeting(me.username)}. ${liveLine}` : liveLine}</p>
         <span className="srv-head-actions">
           <LiveBadge at={updatedAt} onRefresh={() => void refreshNow()} busy={refreshing} />
-          <HomeBlocksMenu blocks={home} onChange={setHome} heroMode={heroMode} onHeroMode={setHeroMode} />
+          <HomeBlocksMenu blocks={home} onChange={setHome} heroMode={heroMode} onHeroMode={setHeroMode} {...(effView === 'tiles' && !phone ? { size, onSize: setSize } : {})} />
           {isAdmin && <a className="btn btn-soft btn-sm" href="/admin/servers" data-magnetic>{t('d2.srv.manage')}</a>}
         </span>
-      </PageHead>
+      </header>
 
       {loaded && servers.length > 0 && home.pulse && (
-        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} />
+        <PulseStrip servers={servers} overview={overview} uptime={upAvg} now={overviewAt || updatedAt} onOpen={open} quietDown={groups.down.length > 0} />
       )}
 
 
@@ -174127,13 +174297,6 @@ function ServerList() {
               <button type="button" className="btn btn-ghost btn-sm" aria-pressed={selOn} onClick={() => (selOn ? exitSelect() : setSelecting(true))} title={t('d2.srv.selectTitle')}>
                 {selOn ? t('d2.srv.cancelSelect') : t('d2.srv.select')}
               </button>
-            )}
-            {effView === 'tiles' && (
-              <div className="seg max-sm:hidden" role="group" aria-label={t('d2.srv.tileSize')}>
-                {([['s', 'S', 'd2.srv.sz.s'], ['m', 'M', 'd2.srv.sz.m'], ['l', 'L', 'd2.srv.sz.l']] as const).map(([id, mark, label]) => (
-                  <button key={id} type="button" className="seg-item" aria-pressed={size === id} title={t(label)} aria-label={t(label)} onClick={() => setSize(id)}><span className="sz-mark" data-sz={id} aria-hidden>{mark}<i /><i /><i /><i /></span></button>
-                ))}
-              </div>
             )}
             <div className="seg" role="group" aria-label={t('d2.news.viewLabel')}>
               {([['tiles', 'd2.srv.v.tiles'], ['list', 'd2.news.viewList'], ['chart', 'd2.srv.v.chart']] as [ServersView, TKey][]).map(([id, label]) => (
@@ -174185,10 +174348,16 @@ function ServerList() {
             )}
 
             {effView === 'tiles' && effFilter === 'all' && (
-              <div className="fade-in srv-grid" data-size={size} ref={gridRef}>
-                {hero && <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />}
-                {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
-              </div>
+              <>
+                <DownStrip servers={groups.down} since={downSince} />
+                <div className="fade-in srv-grid" data-size={size} ref={gridRef}>
+                  {hero && (phone && !selOn
+                    ? <HeroRow key={hero.id} s={hero} label={heroReason && heroReason !== 'attention' ? t(`srv.hero.${heroReason}` as const) : ''} />
+                    : <HeroTile key={hero.id} {...tileProps(hero, 0)} reason={heroReason} />)}
+                  {restShown.map((s, i) => <Fragment key={s.id}>{secHead(i)}<Tile {...tileProps(s, i + 1)} /></Fragment>)}
+                </div>
+                <QuietList servers={groups.quiet} />
+              </>
             )}
           </div>
           {home.news && <WhatsNew open={wnOpen} onToggle={toggleWn} overview={overview} />}
@@ -182053,7 +182222,7 @@ a.adm-reason:hover { filter: brightness(1.1); }
 /* the way in without opening the server: on the cover under the pointer or the keyboard, never on a touch screen */
 .srv-hover-actions { position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; opacity: 0; transform: translateY(4px); pointer-events: none; transition: opacity .15s ease, transform .15s ease; }
 .srv-tile:hover .srv-hover-actions, .srv-tile:focus-within .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; }
-@media (hover: none) { .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; } .srv-hover-actions > button { display: none; } }
+@media (hover: none) { .srv-hover-actions { opacity: 1; transform: none; pointer-events: auto; bottom: 16px; } }
 @media (prefers-reduced-motion: reduce) { .srv-hover-actions { transition: none; transform: none; } }
 /* the tile that closes an unfinished row: the picture on the left, the facts on the right, so it is not taller than its neighbours */
 @media (min-width: 640px) {
@@ -184754,6 +184923,88 @@ html[data-shapes='1'] .adm-grp-head i, html[data-shapes='1'] .srv-mini-dot { bor
 .map-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100lvh; z-index: -1; pointer-events: none; }
 html[data-game-art] .map-bg { opacity: .35; }
 @media print { .map-bg { display: none; } }
+
+/* ================= the home page: more servers on the first screen ================= */
+/* the head in one line */
+.home-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.home-head h1 { margin: 0; font-size: 1.6rem; font-weight: 800; letter-spacing: -.02em; }
+.home-head-sub { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
+.home-head .srv-head-actions { margin-left: auto; align-self: center; }
+html[data-page='servers'] .emb-topline { visibility: hidden; }
+
+/* the summary: one strip; the big chart on demand */
+.pulse-line { display: none; }
+.pulse-toggle { position: absolute; z-index: 3; right: 10px; top: 8px; width: 32px; height: 32px; border: 0; border-radius: 10px; background: rgb(var(--soft)); color: rgb(var(--mute)); cursor: pointer; }
+.pulse.is-open .pulse-toggle span { display: inline-block; transform: rotate(180deg); }
+.pulse { position: relative; }
+:root[data-ember='1'] .pulse.is-compact, .pulse.is-compact { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 8px 16px; padding: 12px 52px 12px 14px; align-items: center; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums, .pulse.is-compact .pulse-nums { grid-column: 1; grid-row: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums > div { padding: 7px 10px; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums dt { font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums dd { margin-top: 1px; font-size: 20px; }
+:root[data-ember='1'] .pulse.is-compact .pulse-chart, .pulse.is-compact .pulse-chart { grid-column: 2; grid-row: auto; min-height: 0; }
+:root[data-ember='1'] .pulse.is-compact .pulse-plot, .pulse.is-compact .pulse-plot { height: 52px; }
+.pulse.is-compact .pulse-chart figcaption, .pulse.is-compact .pulse-y { display: none; }
+:root[data-ember='1'] .pulse.is-compact .pulse-chart-empty { min-height: 52px; }
+@media (max-width: 899px) {
+  :root[data-ember='1'] .pulse.is-compact, .pulse.is-compact { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ember='1'] .pulse.is-compact .pulse-chart, .pulse.is-compact .pulse-chart { display: none; }
+}
+@media (max-width: 639px) {
+  .pulse-line { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+  .pulse.is-open .pulse-chev { transform: rotate(180deg); }
+  .pulse-toggle { display: none; }
+  :root[data-ember='1'] .pulse.is-compact, .pulse.is-compact { padding: 4px 14px; }
+  :root[data-ember='1'] .pulse.is-compact .pulse-nums, .pulse.is-compact .pulse-nums, :root[data-ember='1'] .pulse.is-compact .pulse-chart, .pulse.is-compact .pulse-chart { display: none; }
+}
+
+/* the big card: half as tall, the way in in orange, the chart on its own dark plate */
+:root[data-ember='1'] .hero3, .hero3, :root[data-ember='1'] .hero3.is-down, .hero3.is-down { min-height: 0; }
+.hero3 .h3-l { gap: 8px; padding: 16px 20px; }
+.hero3 .h3-count [class*='text-[72px]'], :root[data-ember='1'] .hero3 .h3-count [class*='text-[72px]'] { font-size: 46px; }
+.hero3 .h3-count { padding-top: 0; }
+.h3-figs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px 18px; }
+.h3-figs .h3-sub { padding-bottom: 6px; }
+.h3-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.h3-play { flex: none; }
+.hero3 .h3-foot, :root[data-ember='1'] .hero3 .h3-foot { display: none; }
+.hero3.is-down .h3-foot, :root[data-ember='1'] .hero3.is-down .h3-foot { display: flex; }
+.h3-row .srv-names, :root[data-ember='1'] .hero3 .h3-row .srv-names { flex: 1 1 12rem; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+.hero3 .h3-chart { margin: 0 10px 10px; padding: 6px 10px 2px; border-radius: 14px; background: rgb(10 8 8 / .72); }
+.hero3 .h3-chart [class*='h-[130px]'] { height: 72px; }
+/* the light theme: a warmer, lighter shade under the white text instead of near black */
+:root[data-ember='1'][data-theme='light'] .hero3 { --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 34%, #46342c); }
+@media (prefers-color-scheme: light) { :root[data-ember='1']:not([data-theme='dark']) .hero3 { --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 34%, #46342c); } }
+
+/* the big card of a phone */
+.home-hero-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--brand) / .5); cursor: pointer; position: relative; }
+.home-hero-label { display: block; font-size: var(--fs-xs); font-weight: 800; color: rgb(var(--link)); }
+
+/* the tile: the places as a thin line along the foot of the picture */
+.srv-cover-cap { position: absolute; left: 10px; right: 10px; bottom: 6px; z-index: 2; pointer-events: none; }
+.srv-tile .srv-cover-cap .srv-cap { height: 4px; }
+.srv-tile:hover .srv-hover-actions { bottom: 16px; }
+/* the address: what a press does, and the address itself under the pointer */
+.srv-addr-reveal { display: inline-grid; min-width: 0; }
+.srv-addr-reveal > span { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-addr-reveal .srv-addr-say { font-family: var(--font-sans); letter-spacing: 0; }
+.srv-addr-reveal .srv-addr-full { visibility: hidden; }
+.srv-addr-copy:hover .srv-addr-say, .srv-addr-copy:focus-visible .srv-addr-say { visibility: hidden; }
+.srv-addr-copy:hover .srv-addr-full, .srv-addr-copy:focus-visible .srv-addr-full { visibility: visible; }
+
+/* the silent servers and the empty ones */
+.home-down { display: grid; gap: 8px; margin: 0 0 14px; padding: 0; list-style: none; }
+.home-down-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: var(--r-lg); background: rgb(var(--badbg)); color: rgb(var(--bad)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .35); }
+.home-down-row a { color: rgb(var(--ink)); }
+.home-down-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: rgb(var(--bad)); }
+.home-quiet-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr)); gap: 10px; margin: 8px 0 0; padding: 0; list-style: none; }
+.home-quiet-row { position: relative; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--line)); }
+.home-quiet-row:hover { box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--brand) / .4); }
+.home-quiet-link::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+/* the names in the big card fade out at the edge instead of being cut in half; in a narrow tile the faces give way, not the ping */
+.hero3 .h3-row .srv-names { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); }
+.srv-tile .srv-count .srv-who { min-width: 0; overflow: hidden; }
+.srv-tile .srv-count > span:last-child { flex: none; }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'

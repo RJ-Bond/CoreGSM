@@ -3,6 +3,7 @@ import { t, useI18n } from '../../i18n';
 import { HERO_MODES, type HeroMode } from './heroLogic';
 
 /** which blocks of the servers page are shown: remembered in this browser; both are on until the person turns one off */
+export type TileSize = 's' | 'm' | 'l';
 export interface HomeBlocks { pulse: boolean; news: boolean }
 const KEY = 'coregsm_home_blocks';
 const ALL_ON: HomeBlocks = { pulse: true, news: true };
@@ -27,7 +28,7 @@ export function useHomeBlocks(): [HomeBlocks, (patch: Partial<HomeBlocks>) => vo
 }
 
 /** «Customise»: a small menu with a switch for every block of the page; closes on Esc and on a click outside */
-export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void; heroMode?: HeroMode; onHeroMode?: (m: HeroMode) => void }) {
+export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode, size, onSize }: { blocks: HomeBlocks; onChange: (patch: Partial<HomeBlocks>) => void; heroMode?: HeroMode; onHeroMode?: (m: HeroMode) => void; size?: TileSize; onSize?: (s: TileSize) => void }) {
   useI18n();
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -51,6 +52,17 @@ export function HomeBlocksMenu({ blocks, onChange, heroMode, onHeroMode }: { blo
               <span>{label}</span>
             </label>
           ))}
+          {size && onSize && (
+            <div className="home-blocks-hero" role="radiogroup" aria-label={t('d2.srv.tileSize')}>
+              <p className="home-blocks-h">{t('d2.srv.tileSize')}</p>
+              {(['s', 'm', 'l'] as const).map((id) => (
+                <label key={id} className="home-blocks-row">
+                  <input type="radio" name="tile-size" className="srv-check" checked={size === id} onChange={() => onSize(id)} />
+                  <span>{t(`d2.srv.sz.${id}` as const)}</span>
+                </label>
+              ))}
+            </div>
+          )}
           {heroMode && onHeroMode && (
             <div className="home-blocks-hero" role="radiogroup" aria-label={t('home.hero')}>
               <p className="home-blocks-h">{t('home.hero')}</p>

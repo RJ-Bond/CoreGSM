@@ -131,3 +131,85 @@ html[data-shapes='1'] .adm-grp-head i, html[data-shapes='1'] .srv-mini-dot { bor
 .map-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100lvh; z-index: -1; pointer-events: none; }
 html[data-game-art] .map-bg { opacity: .35; }
 @media print { .map-bg { display: none; } }
+
+/* ================= the home page: more servers on the first screen ================= */
+/* the head in one line */
+.home-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.home-head h1 { margin: 0; font-size: 1.6rem; font-weight: 800; letter-spacing: -.02em; }
+.home-head-sub { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: rgb(var(--mute)); }
+.home-head .srv-head-actions { margin-left: auto; align-self: center; }
+html[data-page='servers'] .emb-topline { visibility: hidden; }
+
+/* the summary: one strip; the big chart on demand */
+.pulse-line { display: none; }
+.pulse-toggle { position: absolute; z-index: 3; right: 10px; top: 8px; width: 32px; height: 32px; border: 0; border-radius: 10px; background: rgb(var(--soft)); color: rgb(var(--mute)); cursor: pointer; }
+.pulse.is-open .pulse-toggle span { display: inline-block; transform: rotate(180deg); }
+.pulse { position: relative; }
+:root[data-ember='1'] .pulse.is-compact, .pulse.is-compact { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 8px 16px; padding: 12px 52px 12px 14px; align-items: center; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums, .pulse.is-compact .pulse-nums { grid-column: 1; grid-row: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums > div { padding: 7px 10px; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums dt { font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-ember='1'] .pulse.is-compact .pulse-nums dd { margin-top: 1px; font-size: 20px; }
+:root[data-ember='1'] .pulse.is-compact .pulse-chart, .pulse.is-compact .pulse-chart { grid-column: 2; grid-row: auto; min-height: 0; }
+:root[data-ember='1'] .pulse.is-compact .pulse-plot, .pulse.is-compact .pulse-plot { height: 52px; }
+.pulse.is-compact .pulse-chart figcaption, .pulse.is-compact .pulse-y { display: none; }
+:root[data-ember='1'] .pulse.is-compact .pulse-chart-empty { min-height: 52px; }
+@media (max-width: 899px) {
+  :root[data-ember='1'] .pulse.is-compact, .pulse.is-compact { grid-template-columns: minmax(0, 1fr); }
+  :root[data-ember='1'] .pulse.is-compact .pulse-chart, .pulse.is-compact .pulse-chart { display: none; }
+}
+@media (max-width: 639px) {
+  .pulse-line { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+  .pulse.is-open .pulse-chev { transform: rotate(180deg); }
+  .pulse-toggle { display: none; }
+  :root[data-ember='1'] .pulse.is-compact, .pulse.is-compact { padding: 4px 14px; }
+  :root[data-ember='1'] .pulse.is-compact .pulse-nums, .pulse.is-compact .pulse-nums, :root[data-ember='1'] .pulse.is-compact .pulse-chart, .pulse.is-compact .pulse-chart { display: none; }
+}
+
+/* the big card: half as tall, the way in in orange, the chart on its own dark plate */
+:root[data-ember='1'] .hero3, .hero3, :root[data-ember='1'] .hero3.is-down, .hero3.is-down { min-height: 0; }
+.hero3 .h3-l { gap: 8px; padding: 16px 20px; }
+.hero3 .h3-count [class*='text-[72px]'], :root[data-ember='1'] .hero3 .h3-count [class*='text-[72px]'] { font-size: 46px; }
+.hero3 .h3-count { padding-top: 0; }
+.h3-figs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px 18px; }
+.h3-figs .h3-sub { padding-bottom: 6px; }
+.h3-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.h3-play { flex: none; }
+.hero3 .h3-foot, :root[data-ember='1'] .hero3 .h3-foot { display: none; }
+.hero3.is-down .h3-foot, :root[data-ember='1'] .hero3.is-down .h3-foot { display: flex; }
+.h3-row .srv-names, :root[data-ember='1'] .hero3 .h3-row .srv-names { flex: 1 1 12rem; flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+.hero3 .h3-chart { margin: 0 10px 10px; padding: 6px 10px 2px; border-radius: 14px; background: rgb(10 8 8 / .72); }
+.hero3 .h3-chart [class*='h-[130px]'] { height: 72px; }
+/* the light theme: a warmer, lighter shade under the white text instead of near black */
+:root[data-ember='1'][data-theme='light'] .hero3 { --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 34%, #46342c); }
+@media (prefers-color-scheme: light) { :root[data-ember='1']:not([data-theme='dark']) .hero3 { --h3-bg: color-mix(in srgb, var(--gc, #d6420a) 34%, #46342c); } }
+
+/* the big card of a phone */
+.home-hero-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--brand) / .5); cursor: pointer; position: relative; }
+.home-hero-label { display: block; font-size: var(--fs-xs); font-weight: 800; color: rgb(var(--link)); }
+
+/* the tile: the places as a thin line along the foot of the picture */
+.srv-cover-cap { position: absolute; left: 10px; right: 10px; bottom: 6px; z-index: 2; pointer-events: none; }
+.srv-tile .srv-cover-cap .srv-cap { height: 4px; }
+.srv-tile:hover .srv-hover-actions { bottom: 16px; }
+/* the address: what a press does, and the address itself under the pointer */
+.srv-addr-reveal { display: inline-grid; min-width: 0; }
+.srv-addr-reveal > span { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-addr-reveal .srv-addr-say { font-family: var(--font-sans); letter-spacing: 0; }
+.srv-addr-reveal .srv-addr-full { visibility: hidden; }
+.srv-addr-copy:hover .srv-addr-say, .srv-addr-copy:focus-visible .srv-addr-say { visibility: hidden; }
+.srv-addr-copy:hover .srv-addr-full, .srv-addr-copy:focus-visible .srv-addr-full { visibility: visible; }
+
+/* the silent servers and the empty ones */
+.home-down { display: grid; gap: 8px; margin: 0 0 14px; padding: 0; list-style: none; }
+.home-down-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border-radius: var(--r-lg); background: rgb(var(--badbg)); color: rgb(var(--bad)); box-shadow: inset 0 0 0 1px rgb(var(--bad) / .35); }
+.home-down-row a { color: rgb(var(--ink)); }
+.home-down-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: rgb(var(--bad)); }
+.home-quiet-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr)); gap: 10px; margin: 8px 0 0; padding: 0; list-style: none; }
+.home-quiet-row { position: relative; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px; border-radius: var(--r-lg); background: rgb(var(--card)); box-shadow: var(--shadow-1), inset 0 0 0 1px rgb(var(--line)); }
+.home-quiet-row:hover { box-shadow: var(--shadow-2), inset 0 0 0 1px rgb(var(--brand) / .4); }
+.home-quiet-link::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+/* the names in the big card fade out at the edge instead of being cut in half; in a narrow tile the faces give way, not the ping */
+.hero3 .h3-row .srv-names { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); }
+.srv-tile .srv-count .srv-who { min-width: 0; overflow: hidden; }
+.srv-tile .srv-count > span:last-child { flex: none; }

@@ -85,8 +85,14 @@ function PlayersChart({ data, now }: { data: OverviewData | null; now: number })
   );
 }
 
-export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void }) {
+const OPEN_KEY = 'coregsm_pulse_open';
+
+/** `quietDown`: the silent servers are named in their own lines under the strip, so the strip does not repeat them */
+export function PulseStrip({ servers, overview, uptime, now, onOpen, quietDown = false }: { servers: Server[]; overview: OverviewData | null; uptime: number | null; now: number; onOpen?: (s: Server) => void; quietDown?: boolean }) {
   useI18n();
+  // one narrow strip; opened, it shows the big chart (remembered in this browser)
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem(OPEN_KEY) === '1'; } catch { return false; } });
+  const toggle = () => setOpen((v) => { try { localStorage.setItem(OPEN_KEY, v ? '0' : '1'); } catch { /* not remembered */ } return !v; });
   const [{ ember }] = useAppearance();
   const { state, problems } = pulseOf(servers);
   const online = servers.filter((s) => s.online);
@@ -140,8 +146,12 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
           <span className="pulse-alert-go" aria-hidden>→</span>
         </a>
       )}
-    <section className={`pulse pulse-${state}`} aria-label={t('srv.pulse.label')}>
-      {ember && (
+    <section className={`pulse pulse-${state} ${open ? 'is-open' : 'is-compact'}`} aria-label={t('srv.pulse.label')}>
+      <button type="button" className="pulse-line" aria-expanded={open} onClick={toggle}>
+        <b>{t('srv.pulse.line', { n: players, s: online.length, total: servers.length })}</b>
+        <span aria-hidden className="pulse-chev">▾</span>
+      </button>
+      {ember && !(quietDown && state === 'bad') && (
         <div className="pulse-state" role="status">
           <span className="pulse-icon" aria-hidden>{ICON[state]}</span>
           {alert && first ? (
@@ -186,6 +196,7 @@ export function PulseStrip({ servers, overview, uptime, now, onOpen }: { servers
         </div>
       </dl>
       <PlayersChart data={overview} now={now} />
+      <button type="button" className="pulse-toggle" aria-expanded={open} onClick={toggle} title={t(open ? 'srv.pulse.less' : 'srv.pulse.more.btn')} aria-label={t(open ? 'srv.pulse.less' : 'srv.pulse.more.btn')}><span aria-hidden>▾</span></button>
     </section>
     </div>
   );

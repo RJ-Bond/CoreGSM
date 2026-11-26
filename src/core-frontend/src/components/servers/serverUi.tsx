@@ -276,7 +276,7 @@ export function ListSkeleton() {
 /** the address of a server as a button: one tap copies it (the card around it is a link, so the click stays here) */
 const hostOf = (address: string): string => address.replace(/:\d+$/, '');
 
-export function AddrCopy({ address, className = '', split = false }: { address: string; className?: string; split?: boolean }) {
+export function AddrCopy({ address, className = '', split = false, reveal = false }: { address: string; className?: string; split?: boolean; reveal?: boolean }) {
   useI18n();
   const copy = async (e: { stopPropagation: () => void; preventDefault: () => void }) => {
     e.stopPropagation();
@@ -285,7 +285,10 @@ export function AddrCopy({ address, className = '', split = false }: { address: 
   };
   return (
     <button type="button" className="srv-addr-copy" title={t('srv.addr.copy')} aria-label={`${t('srv.addr.copy')}: ${address}`} onClick={(e) => void copy(e)}>
-      {split && /:\d+$/.test(address)
+      {reveal
+        // a card says what the press does; the address itself shows under the pointer and by the keyboard
+        ? <span className={`${className} srv-addr-reveal`}><span className="srv-addr-say">{t('srv.addr.copy')}</span><span className="srv-addr-full">{address}</span></span>
+        : split && /:\d+$/.test(address)
         ? <span className={`${className} srv-addr-split`}><span className="srv-addr-host"><span className="srv-addr-head">{hostOf(address).slice(0, -7)}</span><span className="srv-addr-tail">{hostOf(address).slice(-7)}</span></span><span className="srv-addr-port">{/:\d+$/.exec(address)?.[0]}</span></span>
         : <span className={className}>{address}</span>}
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
