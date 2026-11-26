@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="b40d2abbb3fc"
+COREGSM_BUILD="b97958f9fcc2"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.79"
+COREGSM_VERSION="1.2.80"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -51323,7 +51323,6 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend"
   cat > "$APP_DIR/core-frontend/lint-baseline.json" << '__COREGSM_EOF__'
 {
-  "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
   "jsx-a11y(no-interactive-element-to-noninteractive-role)": 1,
@@ -51334,7 +51333,6 @@ __COREGSM_EOF__
   "react-hooks(exhaustive-deps)": 12,
   "react(exhaustive-effect-dependencies)": 49,
   "react(iframe-missing-sandbox)": 1,
-  "react(immutability)": 2,
   "react(memo-dependencies)": 3
 }
 __COREGSM_EOF__
@@ -124235,8 +124233,8 @@ export const setToken = (t: string) => {
 };
 
 // every request to our API proves it comes from this page (the server's CSRF guard for cookie sessions)
-if (typeof window !== 'undefined' && !(window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch) {
-  (window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch = true;
+if (typeof window !== 'undefined' && !(window as unknown as { coregsmFetchPatched?: boolean }).coregsmFetchPatched) {
+  (window as unknown as { coregsmFetchPatched?: boolean }).coregsmFetchPatched = true;
   const native = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     try {
@@ -138341,6 +138339,7 @@ __COREGSM_EOF__
   cat > "$APP_DIR/core-frontend/src/components/profile/PushCard.tsx" << '__COREGSM_EOF__'
 /** Profile → Безопасность: notifications on this device (Web Push), the same as the inbox in the header. */
 import { useEffect, useState } from 'react';
+import { installPrompt, keepInstallPrompt } from '../../installPrompt';
 import { api } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { Button, ErrorLine, Section, Switch, toast } from '../../ui';
@@ -138353,8 +138352,6 @@ const b64ToBytes = (s: string) => {
 };
 const supported = () => typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 
-interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
-const installPrompt = () => (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt;
 
 interface Quiet { enabled: boolean; fromMin: number; toMin: number; tz: number }
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -138403,7 +138400,7 @@ export function PushCard() {
     await p.prompt();
     const { outcome } = await p.userChoice;
     if (outcome === 'accepted') {
-      (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt = undefined;
+      keepInstallPrompt(undefined);
       setInstallable(false);
     }
   };
@@ -143966,6 +143963,20 @@ function hueGap(a: string, b: string): number {
   return Math.min(d, 360 - d);
 }
 
+/** the colour of each server's line: its game's colour, or a spare one when that hue is already taken */
+function spreadColors(servers: { id: number; game: string }[]): Map<number, string> {
+  const used: string[] = [];
+  let spare = 0;
+  const out = new Map<number, string>();
+  for (const s of servers) {
+    let c = gameColor(s.game);
+    for (let k = 0; used.some((u) => hueGap(u, c) < 28) && k < SPARE.length; k++) c = SPARE[spare++ % SPARE.length];
+    used.push(c);
+    out.set(s.id, c);
+  }
+  return out;
+}
+
 export default function CompareChart({ servers }: { servers: Server[] }) {
   useI18n();
   const [hours, setHours] = useState(24);
@@ -143999,14 +144010,7 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
 
   // a line keeps its game's colour unless that hue is already taken by a line before it
   const colors = useMemo(() => {
-    const used: string[] = [];
-    let spare = 0;
-    return new Map(servers.map((s) => {
-      let c = gameColor(s.game);
-      for (let k = 0; used.some((u) => hueGap(u, c) < 28) && k < SPARE.length; k++) c = SPARE[spare++ % SPARE.length];
-      used.push(c);
-      return [s.id, c];
-    }));
+    return spreadColors(servers);
   }, [servers]);
 
   const series = useMemo(() => {
@@ -144720,6 +144724,376 @@ export function NoMatchArt() {
       <path d="M147 99l16 16" className="stroke-brand" strokeWidth="7" strokeLinecap="round" />
       <path d="M124 78l16 12M140 78l-16 12" className="stroke-mute" strokeWidth="3" strokeLinecap="round" />
     </Frame>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components/servers"
+  cat > "$APP_DIR/core-frontend/src/components/servers/Tiles.tsx" << '__COREGSM_EOF__'
+/** The cards of the server list: the big one, the tile, the row of a phone, and what they share. */
+import { useState, type CSSProperties, type MouseEvent } from 'react';
+import { nextUsualPeak } from './heroLogic';
+import { useBaseline } from './useBaseline';
+import { api, type Server } from '../../api';
+import { useAuth } from '../../auth';
+import { gameColor, gameGradient, gameLabel } from '../../games';
+import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../../cover';
+import MaintenanceChip from '../MaintenanceChip';
+import { AnimatedNumber, Burst, GameAvatar, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, toast, fmtTime, errText, useDayStats } from '../../ui';
+import { connectGuide } from '../../connectGuides';
+import { t, useI18n } from '../../i18n';
+import { calmSeriesColor, useCoverAccent } from '../server/coverAccent';
+import { pingTone, TONE_TEXT } from '../server/helpers';
+import { AddrCopy, PlayerStack, CapacityBar, useQuickLongPress, CountReact, PingBars, PlayerNames, StatusFlash, TrendChip, durText, reactionOf, type Reactions } from './serverUi';
+import { type SelectProps } from './ServerViews';
+import { QuickMenu } from './QuickMenu';
+import { type HeroReason } from './overviewLogic';
+import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from './CardIcons';
+
+/** staggered entrance: the tile number goes to the --i custom property */
+export const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
+
+/** `className` colours the star; `glass` is the variant for covers (white star on a translucent disc) */
+export function FavButton({ on, name, onClick, className = '', glass = false }: { on: boolean; name: string; onClick: () => void; className?: string; glass?: boolean }) {
+  useI18n();
+  // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
+  const [pops, setPops] = useState(0);
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
+      className={`${glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'} ${on ? '' : 'star-quiet'}`}
+      title={on ? t('d2.srv.favRemove') : t('d2.srv.fav')}
+      aria-label={t('d2.srv.favName', { name })}
+      aria-pressed={on}
+    >
+      <span className={`star-wrap text-xl leading-none ${className}`}>
+        <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
+        {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
+      </span>
+    </button>
+  );
+}
+
+export type TileDnd = React.HTMLAttributes<HTMLElement> & { 'data-tile-id'?: number };
+export const ORDER_KEY = 'coregsm_srv_order';
+export const readOrder = (): number[] => {
+  try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []; } catch { return []; }
+};
+export const saveOrder = (ids: number[]) => { try { localStorage.setItem(ORDER_KEY, JSON.stringify(ids)); } catch { /* not remembered */ } };
+
+/** the checkbox of the selection mode in a corner of a card */
+export function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
+  useI18n();
+  return (
+    <input
+      type="checkbox"
+      className={`srv-check srv-check-card ${className}`}
+      checked={select.has(s.id)}
+      onChange={() => select.toggle(s.id)}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={t('d2.news.pickOne', { title: s.name })}
+    />
+  );
+}
+
+/** in the selection mode a link toggles the card instead of leaving the page */
+export const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElement>) => {
+  e.stopPropagation();
+  if (select?.on) {
+    e.preventDefault();
+    select.toggle(s.id);
+  }
+};
+
+export function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; downSince?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
+  const sparkSpan = useSparkSpanMin(s.id);
+  useI18n();
+  const [c1] = gameGradient(s.game);
+  const lag = isLag(s);
+  const r = reactionOf(rx, s.id);
+  const emb = emblemStyle(s.coverUrl, s.game);
+  const cover = coverUrlOf(s.coverUrl, s.game, false);
+  const { swallow, ...lp } = useQuickLongPress();
+  const { isAdmin } = useAuth();
+  const baseline = useBaseline(s.id);
+  const peak = s.online ? nextUsualPeak(baseline, Date.now()) : null;
+  const play = connectGuide(s.game, s.address).link;
+  const full = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.9;
+  const [polling, setPolling] = useState(false);
+  const pollNow = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
+  return (
+    <article
+      {...lp}
+      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''} ${full ? 'is-full' : ''} ${s.online && lag ? 'is-lag' : ''}`}
+      style={{
+        ...stagger(idx),
+        ['--gc' as string]: gameColor(s.game),
+        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -16px ${c1}66`,
+      }}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
+
+      <div className="h3-l">
+        <div className="h3-head flex items-start gap-3">
+          <GameAvatar game={s.game} size={46} glass vtId={s.id} />
+          <div className="min-w-0 flex-1">
+            {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
+            <h2 className="line-clamp-2 wrap-break-word text-xl font-extrabold leading-tight" title={s.name}>
+              <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
+            </h2>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-fs-sm font-bold text-white/85">
+              <span>{gameLabel(s.game)}</span>
+              <span aria-hidden>·</span>
+              <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
+            </div>
+            {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
+          </div>
+        </div>
+
+        {s.online ? (
+          <>
+            <div className={`h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1 ${s.players === 0 ? 'is-zero' : ''}`}>
+              <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
+              <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
+            </div>
+            <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
+              <TrendChip serverId={s.id} onDark />
+              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
+              {peak && <span className="hero-peak" title={t('srv.hero.peakTip', { n: peak.value })}>{peak.now ? t('srv.hero.peakNow') : t('srv.hero.peakAt', { time: fmtTime(peak.at), h: peak.hoursAhead })}</span>}
+            </div>
+            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
+            <PlayerNames names={s.playerNames ?? []} max={4} onDark />
+            {play && (
+              <div className="h3-cta">
+                <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>
+              </div>
+            )}
+          </>
+        ) : (
+          // a server that is down: what is wrong and since when, instead of the figures
+          <div className="h3-down rounded-2xl bg-white/10 px-4 py-3" title={s.error ?? undefined}>
+            {s.hasStatus ? (
+              <>
+                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? t('d2.srv.noReply')}</p>
+                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}{t('d2.srv.lastReply', { ago: ago(s.updatedAt) })}</p>
+              </>
+            ) : (
+              <p className="text-base font-extrabold">{t('d2.srv.waitFirst')}</p>
+            )}
+          </div>
+        )}
+
+        <div className="h3-foot flex flex-wrap items-center text-fs-sm font-bold text-white/80">
+          <span className="h3-fact"><CardClock />{spanCaption(sparkSpan)}</span>
+          {uptime != null && <span className="h3-fact"><CardUptime />{t('d2.srv.uptime', { v: (Math.round(uptime * 10) / 10).toLocaleString('ru-RU') })}</span>}
+          {s.online && s.map && <span className="h3-fact"><CardMap />{t('d2.srv.map', { map: s.map })}</span>}
+          {s.version && <span className="h3-fact"><CardTag />v{s.version}</span>}
+          {!s.online && <span className="h3-fact"><CardRefresh />{t('d2.srv.updated', { ago: ago(s.updatedAt) })}</span>}
+        </div>
+      </div>
+
+      <div
+        className={`h3-r ${emb.className ? 'emblem-host' : ''}`}
+        style={{ ...emb.style, ['--h3-cover' as string]: cover ? `url("${cover}")` : 'none', ['--h3-fallback' as string]: gameBackdrop(c1) }}
+      >
+        {emb.className && <span aria-hidden className="emblem-layer" />}
+        <div className="h3-actions flex items-center gap-1">
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
+          <QuickMenu s={s} glass />
+        </div>
+        {s.online ? (
+          <div className="h3-chart">
+            <Spark serverId={s.id} color="#ffffff" variant="hero" />
+          </div>
+        ) : (
+          <div className="h3-downpane">
+            <span className="h3-down-k">{t('srv.down.k')}</span>
+            <b className="h3-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
+            <span className="h3-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+            {isAdmin && <button type="button" className="btn btn-glass btn-sm" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+/** the phone version of a tile: one row (emblem, name with a thin bar, players, status dot) at least 56 px high */
+export function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  useI18n();
+  const lag = isLag(s);
+  const tone = !s.hasStatus ? 'bg-mute' : !s.online ? 'bg-bad' : lag || s.maintenance ? 'bg-warn' : 'bg-ok';
+  const { swallow, ...lp } = useQuickLongPress();
+  return (
+    <article
+      {...lp}
+      className={`srv-row tile-in relative ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'}`}
+      style={stagger(idx)}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
+      <GameAvatar game={s.game} size={40} vtId={s.id} />
+      <div className="srv-row-main">
+        <h3 className="text-fs-base font-extrabold leading-tight" title={s.name}>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)}>{s.name}</a>
+        </h3>
+        {s.online ? (
+          <CapacityBar className="srv-row-bar" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" showPct={false} slots={false} />
+        ) : (
+          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) }) : t('d2.srv.waitFirst')}</p>
+        )}
+      </div>
+      <div className="srv-row-count">
+        {s.online ? <><b>{s.players}</b><span>/{s.maxPlayers}</span></> : <span>–</span>}
+      </div>
+      <span className={`srv-row-dot ${tone}`} aria-hidden />
+      {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-warn' : 'text-mute'} />}
+      {/* the menu that a long touch opens: out of sight, its button is pressed by the touch handler */}
+      <span className="srv-row-qm" aria-hidden><QuickMenu s={s} /></span>
+    </article>
+  );
+}
+
+/** a server with nobody on it: not a grey zero and an empty bar, but when somebody was last there, the peak of the day and when it usually fills up */
+export function EmptyNow({ s, accent }: { s: Server; accent?: string }) {
+  useI18n();
+  const day = useDayStats(s.id);
+  const baseline = useBaseline(s.id);
+  const usual = nextUsualPeak(baseline, Date.now(), 24);
+  return (
+    <div className="srv-empty px-1.5">
+      <div className="srv-empty-head">
+        <b><i aria-hidden />{t('srv.empty.title')}<small>/ {s.maxPlayers}</small></b>
+        {s.ping != null && <span className={`inline-flex items-center gap-1.5 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</span>}
+      </div>
+      <CapacityBar className="mt-1" players={0} max={s.maxPlayers} color="rgb(var(--ink) / .5)" slots={false} />
+      <ul>
+        {day.known && <li>{day.lastActiveMin == null ? t('srv.empty.noneDay') : t('srv.empty.last', { d: durText(Math.max(1, day.lastActiveMin) * 60_000) })}</li>}
+        {day.known && day.peak > 0 && <li>{t('srv.empty.peak', { n: day.peak })}</li>}
+        {usual && !usual.now && <li>{t('srv.empty.usual', { time: fmtTime(usual.at) })}</li>}
+      </ul>
+      {accent && <div className="srv-spark-wrap" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
+    </div>
+  );
+}
+
+export function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd, wide }: { dnd?: TileDnd; wide?: number; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
+  useI18n();
+  const [who, setWho] = useState(false);
+  const [c1] = gameGradient(s.game);
+  // the accent is taken from the cover picture, so two games of the same colour family still look different
+  const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
+  const lag = isLag(s);
+  const r = reactionOf(rx, s.id);
+  const emb = emblemStyle(s.coverUrl, s.game);
+  const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
+  // as many people as at the busiest moment of the day (a real crowd, not two players on a quiet server)
+  const dayStats = useDayStats(s.id);
+  const atPeak = s.online && dayStats.known && dayStats.peak >= 5 && s.players >= dayStats.peak;
+  const { swallow, ...lp } = useQuickLongPress();
+  const { isAdmin } = useAuth();
+  const unnamed = s.name === s.address || s.name === `${s.host}:${s.port}`;
+  const play = connectGuide(s.game, s.address).link;
+  const [polling, setPolling] = useState(false);
+  const pollNow = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
+  const planned = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    setPolling(true);
+    const now = Date.now();
+    try { await api('/maintenance', 'POST', { serverId: s.id, name: t('srv.planned.name'), startTs: now, endTs: now + 3_600_000, repeat: 'none' }); toast(t('srv.planned.done')); } catch (err) { toast(errText(err), 'err'); }
+    setPolling(false);
+  };
+  const copyAddr = async (e: MouseEvent<HTMLElement>) => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
+  };
+  return (
+    <article
+      {...dnd}
+      {...lp}
+      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''} ${wide && wide > 1 ? 'srv-wide' : ''}`}
+      // the fuller the server, the stronger its glow in the game's colour
+      style={{ ...stagger(idx), ...(wide && wide > 1 ? { gridColumn: `span ${wide}` } : {}), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
+      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
+    >
+      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
+      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>
+        <span aria-hidden className="cover-scrim" />
+        <GameAvatar game={s.game} size={46} glass vtId={s.id} />
+        <div className="srv-cover-actions flex items-center gap-0.5">
+          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
+          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
+          <QuickMenu s={s} glass />
+        </div>
+        {/* the way in without opening the server: shown under the pointer (and by the keyboard), not on a phone */}
+        <div className="srv-hover-actions">
+          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
+          <button type="button" className="btn btn-glass btn-sm" onClick={(e) => void copyAddr(e)}>{t('srv.tile.copy')}</button>
+        </div>
+      </div>
+
+      <div className="px-1.5">
+        <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
+          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className={unnamed ? 'srv-unnamed hover:text-link' : 'hover:text-link'} title={unnamed && isAdmin ? t('srv.unnamed.tip') : undefined}>{unnamed ? t('srv.unnamed') : s.name}</a>
+        </h3>
+        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="srv-game truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
+        {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
+      </div>
+
+      {s.online && s.players === 0 ? (
+        <EmptyNow s={s} accent={accent} />
+      ) : s.online ? (
+        <>
+          <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
+            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
+            <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
+            <TrendChip serverId={s.id} />
+            {atPeak && <span className="srv-peak-chip" title={t('srv.tile.dayPeakHint', { n: dayStats.peak })}>★ {t('srv.tile.dayPeak')}</span>}
+            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{(s.playerNames?.length ?? 0) === 1 ? <span className="srv-who-one">{s.playerNames[0]}</span> : <PlayerStack names={s.playerNames ?? []} />}</button>}
+            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
+          </div>
+          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
+          {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
+          {s.players === 0
+            ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
+            : <div className="srv-spark-wrap px-1.5" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
+        </>
+      ) : (
+        s.hasStatus ? (
+          <>
+            <div className="srv-down mx-1.5" title={s.error ?? undefined}>
+              <span className="srv-down-k"><i aria-hidden />{t('srv.down.k')}</span>
+              <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
+              <span className="srv-down-s">{downSince ? t('srv.down.since', { when: new Date(downSince).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) + ' · ' : ''}{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
+              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
+              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} title={t('srv.planned.hint')} onClick={(e) => void planned(e)}>{t('srv.planned.btn')}</button>}
+            </div>
+            <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
+          </>
+        ) : (
+          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">{t('d2.srv.waitFirst')}</div>
+        )
+      )}
+
+      <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
+        <AddrCopy address={s.address} className="min-w-0 font-mono" split />
+        <span className="flex shrink-0 items-center gap-2">
+          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}><small className="srv-up-l">{t('srv.up.label')}</small> {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
+          {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
+        </span>
+      </div>
+    </article>
   );
 }
 __COREGSM_EOF__
@@ -149357,6 +149731,16 @@ html[data-contrast='high'] main a:not([class]) { text-decoration-line: underline
 /* the visual editor of a game message: a placeholder in the empty box, the text keeps its spaces */
 .rich-box { white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
 .rich-box:empty::before { content: attr(data-placeholder); color: rgb(var(--mute)); pointer-events: none; }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src"
+  cat > "$APP_DIR/core-frontend/src/installPrompt.ts" << '__COREGSM_EOF__'
+/** The browser's offer to install the panel as an app: main.tsx keeps it, the «Установить приложение» button uses it. */
+
+export interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
+
+let kept: InstallPrompt | undefined;
+export const keepInstallPrompt = (e: Event | undefined): void => { kept = e as InstallPrompt | undefined; };
+export const installPrompt = (): InstallPrompt | undefined => kept;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/lazyPage.tsx" << '__COREGSM_EOF__'
@@ -160241,6 +160625,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/main.tsx" << '__COREGSM_EOF__'
 import React from 'react';
+import { keepInstallPrompt } from './installPrompt';
 import ReactDOM from 'react-dom/client';
 // variable Manrope (the Ember look): Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800).
 // Loaded with the main styles, not after the script has run: the rules only name the files, a font is fetched when text uses it, so the
@@ -160306,7 +160691,7 @@ void i18nReady().then(() => {
 // the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
-  (window as unknown as { __installPrompt?: Event }).__installPrompt = e;
+  keepInstallPrompt(e);
   window.dispatchEvent(new Event('coregsm:installable'));
 });
 if ('serviceWorker' in navigator) {
@@ -161925,7 +162310,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
                 <Snippet label="BBCode" text={sn.bbcode} />
               </div>
               <div className={`space-y-3 ${snipTab === 'widget' ? '' : 'hidden'}`}>
-                <iframe key={sn.widget} title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
+                <iframe key={sn.widget} sandbox="allow-scripts allow-same-origin allow-popups" title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
                 <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
               </div>
               <div className={`space-y-3 md:col-span-2 ${snipTab === 'card' ? '' : 'hidden'}`}>
@@ -166068,25 +166453,19 @@ function PluginModal({ server, onClose, onChanged }: { server: NewsServerInfo; o
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsCards.tsx" << '__COREGSM_EOF__'
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../api';
 import { Switch } from '../components/Switch';
 import { AutoText, FoldCard, VarChips } from '../components/GameNewsParts';
 import { ChatLines, NewsEditor, NewsPreview } from '../components/NewsEditor';
 import { confirmDialog } from '../confirm';
 import { t, useI18n } from '../i18n';
-import {
-  ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, SWATCHES, accentLine, commandLine, kickLine, modLine, DEFAULT_KICK, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews,
-  type AnsiColor, type ChatColors, type ChatKind, type ChatSettings, type Extras, type JoinLeave, type KickSettings, type RegisterSettings, type Welcome, type WelcomeStyle,
-} from '../gameNews';
+import { accentLine, commandLine, WELCOME_STYLES, WELCOME_VARIABLES, composeLine, isHex, validateNews, type Extras, type JoinLeave, type RegisterSettings, type Welcome, type WelcomeStyle } from '../gameNews';
 import { ScopeNote, useScope } from './GameNewsScope';
-import { SayCheck } from './GameNewsSayCheck';
-import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
-import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
-import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
-import { IconEdit } from '../icons';
-
-const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
+import { Field, SaveBadge, useAutosave } from '../ui';
+import { ColorField, onOff } from './GameNewsFields';
+export { KickCard } from './GameNewsKickCard';
+export { ChatCard } from './GameNewsChatCard';
 
 /**
  * The greeting for a player who joins, shown by the plugin to that player only. One text for everybody, or one for a
@@ -166168,51 +166547,6 @@ export function WelcomeCard({ initial }: { initial: Welcome }) {
       <NewsPreview text={text || f.text} welcome />
       {auto.invalid && f.enabled && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
     </FoldCard>
-  );
-}
-
-/** a colour: the palette, the system picker and a HEX box */
-const RECENT_KEY = 'coregsm.gn.recentColors';
-const readRecent = (): string[] => { try { return (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as string[]).filter(isHex).slice(0, 6); } catch { return []; } };
-const SWATCH_HEX = new Set(SWATCHES.map((c) => c.hex));
-
-function ColorField({ label, value, onChange, gameHex }: { label: string; value: string; onChange: (v: string) => void; gameHex?: string }) {
-  const [recent, setRecent] = useState<string[]>(readRecent);
-  // a colour that was picked stays in the «recent» row of every colour field (kept in this browser)
-  const remember = (v: string) => {
-    if (!isHex(v) || SWATCH_HEX.has(v.toUpperCase())) return;
-    const next = [v.toUpperCase(), ...readRecent().filter((x) => x.toUpperCase() !== v.toUpperCase())].slice(0, 6);
-    try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private mode */ }
-    setRecent(next);
-  };
-  return (
-    <div className="space-y-1.5">
-      <span className="text-sm font-bold">{label}</span>
-      <div className="flex flex-wrap items-center gap-2">
-        {SWATCHES.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
-            style={{ background: c.hex }}
-            aria-label={`${label}: ${c.hex}`}
-            aria-pressed={value.toUpperCase() === c.hex}
-            onClick={() => onChange(c.hex)}
-          />
-        ))}
-        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
-        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} onBlur={() => remember(value)} />
-        {gameHex && value.toUpperCase() !== gameHex && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(gameHex)}>{t('gn.col.game')}</button>}
-      </div>
-      {recent.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-bold text-mute">{t('gn.col.recent')}</span>
-          {recent.map((c) => (
-            <button key={c} type="button" className={`h-6 w-6 rounded-full border ${value.toUpperCase() === c ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`} style={{ background: c }} aria-label={`${label}: ${c}`} onClick={() => onChange(c)} />
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -166385,254 +166719,6 @@ export function RegisterCard({ initial }: { initial: RegisterSettings }) {
   );
 }
 
-/**
- * Moderation from the game (.kick, .ban, .warn, .unban): how it reads in the chat (words and colours of the nickname, the reason and the
- * administrator), what it asks for and refuses, what the player is told in private, how long a warning counts, the short names of reasons.
- * Everything is set here; one card, one setting, four parts.
- */
-export function KickCard({ initial }: { initial: KickSettings }) {
-  useI18n();
-  const sc = useScope();
-  const [f, setF] = useState<KickSettings>(initial);
-  const [saved, setSaved] = useState<KickSettings>(initial);
-  const [part, setPart] = useState<'kick' | 'ban' | 'warn' | 'reasons'>('kick');
-  const set = <K extends keyof KickSettings>(k: K, v: KickSettings[K]) => setF((x) => ({ ...x, [k]: v }));
-  const auto = useAutosave({
-    value: f,
-    saved,
-    delay: 900,
-    validate: (v) => {
-      if ([v.template, v.banTemplate, v.warnTemplate, v.unbanTemplate, v.banJoinText, v.blockJoinText, v.notifyText, v.defaultReason].some((x) => !x.trim())) return t('gn.hint.text');
-      if (![v.textColor, v.nameColor, v.reasonColor, v.adminColor].every(isHex)) return t('gn.jl.badColor');
-      if (v.reasons.some((r) => !r.key.trim() || !r.text.trim())) return t('gn.kk.reasonEmpty');
-      return null;
-    },
-    save: async (v) => { await api(`/game-news/kick-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
-  });
-  const safe = (v: KickSettings): KickSettings => ({ ...v, textColor: isHex(v.textColor) ? v.textColor : DEFAULT_KICK.textColor, nameColor: isHex(v.nameColor) ? v.nameColor : DEFAULT_KICK.nameColor, reasonColor: isHex(v.reasonColor) ? v.reasonColor : DEFAULT_KICK.reasonColor, adminColor: isHex(v.adminColor) ? v.adminColor : DEFAULT_KICK.adminColor });
-  const sv = safe(f);
-  const reasonText = f.reasons[0]?.text ?? f.defaultReason;
-  const priv = (text: string, vars: { reason?: string; n?: number; limit?: number; until?: string; left?: string }) =>
-    modLine({ ...sv, nameColor: sv.textColor, adminColor: sv.textColor, reasonColor: '#FFCC33' }, text.replace(/\{until\}/g, vars.until ?? '').replace(/\{left\}/g, vars.left ?? ''), { reason: vars.reason, n: vars.n, limit: vars.limit });
-  const [pickLog, setPickLog] = useState(false);
-  const varsAll = [{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: reasonText }, { name: 'admin', example: 'Админ' }];
-
-  const switchRow = (key: 'requireReason' | 'protectAdmins' | 'announce' | 'notifyPlayer', label: Parameters<typeof t>[0], note: Parameters<typeof t>[0]) => (
-    <label key={key} className="flex items-start gap-3 font-bold">
-      <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
-      <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
-    </label>
-  );
-
-  return (
-    <FoldCard
-      id="kick"
-      title={t('gn.kk.title')}
-      summary={f.enabled ? t('gn.kk.sumOn') : t('gn.kk.sumOff')}
-      on={f.enabled}
-      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
-    >
-      <ScopeNote part="kick" />
-      <p className="text-sm font-semibold text-mute">{t('gn.kk.note')}</p>
-
-      <label className="flex items-center gap-3 font-bold">
-        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
-        {t('gn.kk.enabled')}
-      </label>
-
-      <SubTabs
-        label={t('gn.kk.title')}
-        value={part}
-        onChange={setPart}
-        items={[{ id: 'kick', label: t('gn.kk.p.kick') }, { id: 'ban', label: t('gn.kk.p.ban') }, { id: 'warn', label: t('gn.kk.p.warn') }, { id: 'reasons', label: t('gn.kk.p.reasons'), badge: f.reasons.length }]}
-      />
-
-      {part === 'kick' && (
-        <div className="space-y-4">
-          <WithPreview
-            preview={(
-              <>
-                <ChatLines lines={f.announce ? [kickLine(sv, 'WhiteLegioN', reasonText, 'Админ'), kickLine(sv, 'WhiteLegioN', f.defaultReason, 'Админ')] : []} />
-                {f.notifyPlayer && <ChatLines lines={[priv(f.notifyText, { reason: reasonText })]} />}
-                {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
-              </>
-            )}
-          >
-            <Field label={t('gn.kk.template')}>
-              <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
-            </Field>
-            <VarChips vars={varsAll} onPick={(v) => set('template', `${f.template} ${v}`.trim())} />
-            <div className="grid gap-4 sm:grid-cols-2">
-              <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
-              <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
-              <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
-              <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
-            </div>
-          </WithPreview>
-
-          <div className="space-y-2">
-            {switchRow('announce', 'gn.kk.announce', 'gn.kk.announceNote')}
-            {switchRow('notifyPlayer', 'gn.kk.notify', 'gn.kk.notifyNote')}
-          </div>
-          {f.notifyPlayer && (
-            <Field label={t('gn.kk.notifyText')}>
-              <AutoText value={f.notifyText} maxLength={300} onChange={(e) => set('notifyText', e.target.value)} />
-            </Field>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field label={t('gn.kk.defaultReason')}>
-              <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
-            </Field>
-            <Field label={t('gn.kk.cooldown')}>
-              <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
-            </Field>
-            <Field label={t('gn.kk.block')}>
-              <input className="input w-32" type="number" min={0} max={1440} value={f.rejoinBlockMin} onChange={(e) => set('rejoinBlockMin', Number(e.target.value))} />
-            </Field>
-          </div>
-          {f.rejoinBlockMin > 0 && (
-            <Field label={t('gn.kk.blockText')}>
-              <AutoText value={f.blockJoinText} maxLength={300} onChange={(e) => set('blockJoinText', e.target.value)} />
-            </Field>
-          )}
-
-          <div className="space-y-2">
-            {switchRow('requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote')}
-            {switchRow('protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote')}
-          </div>
-
-          <div className="space-y-2 rounded-xl border border-line px-4 py-3">
-            <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
-            <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
-            <div className="flex flex-wrap items-center gap-2">
-              {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
-              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
-              {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
-            </div>
-            {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
-          </div>
-        </div>
-      )}
-
-      {part === 'ban' && (
-        <WithPreview
-          preview={(
-            <>
-              <ChatLines lines={f.announce ? [modLine(sv, f.banTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', time: t('gn.kk.sampleTime') }), modLine(sv, f.unbanTemplate, { name: 'WhiteLegioN', admin: 'Админ' })] : []} />
-              <ChatLines lines={[priv(f.banJoinText, { reason: reasonText, until: t('gn.kk.sampleUntil') })]} />
-            </>
-          )}
-        >
-          <label className="flex items-center gap-3 font-bold">
-            <Switch checked={f.banEnabled} onChange={(v) => set('banEnabled', v)} />
-            {t('gn.kk.banEnabled')}
-          </label>
-          <p className="text-sm font-semibold text-mute">{t('gn.kk.banNote')}</p>
-          <Field label={t('gn.kk.banTemplate')}>
-            <AutoText value={f.banTemplate} maxLength={300} onChange={(e) => set('banTemplate', e.target.value)} />
-          </Field>
-          <VarChips vars={[...varsAll, { name: 'time', example: t('gn.kk.sampleTime') }]} onPick={(v) => set('banTemplate', `${f.banTemplate} ${v}`.trim())} />
-          <Field label={t('gn.kk.unbanTemplate')}>
-            <AutoText value={f.unbanTemplate} maxLength={300} onChange={(e) => set('unbanTemplate', e.target.value)} />
-          </Field>
-          <VarChips vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'admin', example: 'Админ' }]} onPick={(v) => set('unbanTemplate', `${f.unbanTemplate} ${v}`.trim())} />
-          <Field label={t('gn.kk.banJoin')}>
-            <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
-          </Field>
-          <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
-          <Field label={t('gn.kk.banScope')}>
-            <p className="mb-1 text-xs text-mute">{t('gn.kk.banScopeHint')}</p>
-            <select className="input w-64" value={f.banScope} onChange={(e) => set('banScope', e.target.value === 'server' ? 'server' : 'all')}>
-              <option value="all">{t('gn.kk.banScopeAll')}</option>
-              <option value="server">{t('gn.kk.banScopeServer')}</option>
-            </select>
-          </Field>
-          <label className="flex items-start gap-3 font-bold">
-            <Switch className="mt-0.5" checked={f.banDm} onChange={(v) => set('banDm', v)} />
-            <span>{t('gn.kk.banDm')}<span className="block text-sm font-semibold text-mute">{t('gn.kk.banDmNote')}</span></span>
-          </label>
-        </WithPreview>
-      )}
-
-      {part === 'warn' && (
-        <WithPreview preview={<ChatLines lines={f.announce ? [modLine(sv, f.warnTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', n: 2, limit: f.warnLimit })] : []} />}>
-          <label className="flex items-center gap-3 font-bold">
-            <Switch checked={f.warnEnabled} onChange={(v) => set('warnEnabled', v)} />
-            {t('gn.kk.warnEnabled')}
-          </label>
-          <p className="text-sm font-semibold text-mute">{t('gn.kk.warnNote')}</p>
-          <Field label={t('gn.kk.warnTemplate')}>
-            <AutoText value={f.warnTemplate} maxLength={300} onChange={(e) => set('warnTemplate', e.target.value)} />
-          </Field>
-          <VarChips vars={[...varsAll, { name: 'n', example: '2' }, { name: 'limit', example: String(f.warnLimit) }]} onPick={(v) => set('warnTemplate', `${f.warnTemplate} ${v}`.trim())} />
-          <div className="grid gap-4 sm:grid-cols-2">
-            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnLimit')}>
-              <input className="input w-32" type="number" min={0} max={20} value={f.warnLimit} onChange={(e) => set('warnLimit', Number(e.target.value))} />
-            </Field>}
-            <Field label={t('gn.kk.warnDays')}>
-              <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
-            </Field>
-            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnAction')}>
-              <select className="input w-48" value={f.warnAction} onChange={(e) => set('warnAction', e.target.value === 'ban' ? 'ban' : 'kick')}>
-                <option value="kick">{t('gn.kk.warnActionKick')}</option>
-                <option value="ban">{t('gn.kk.warnActionBan')}</option>
-              </select>
-            </Field>}
-            {!(f.ladder ?? []).length && f.warnAction === 'ban' && (
-              <Field label={t('gn.kk.warnBanTime')}>
-                <p className="mb-1 text-xs text-mute">{t('gn.kk.warnBanTimeHint')}</p>
-                <input className="input w-32 font-mono" value={f.warnBanTime} maxLength={12} onChange={(e) => set('warnBanTime', e.target.value)} />
-              </Field>
-            )}
-          </div>
-          <div className="space-y-2" data-testid="warn-ladder">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h4 className="font-extrabold">{t('gn.kk.ladder')}</h4>
-                <p className="text-sm font-semibold text-mute">{t('gn.kk.ladderNote')}</p>
-              </div>
-              <button type="button" className="btn btn-soft btn-sm" disabled={(f.ladder ?? []).length >= 6} onClick={() => set('ladder', [...(f.ladder ?? []), { at: Math.max(0, ...(f.ladder ?? []).map((x) => x.at)) + 1, action: 'kick', time: '1d' }])}>{t('gn.kk.ladderAdd')}</button>
-            </div>
-            {(f.ladder ?? []).map((r, i) => (
-              <div key={i} className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-bold">{t('gn.kk.ladderAt')}</span>
-                <input className="input w-20" type="number" min={1} max={50} aria-label={t('gn.kk.ladderAt')} value={r.at} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, at: Number(e.target.value) } : x)))} />
-                <select className="input w-40" aria-label={t('gn.kk.warnAction')} value={r.action} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, action: e.target.value === 'ban' ? 'ban' : 'kick' } : x)))}>
-                  <option value="kick">{t('gn.kk.warnActionKick')}</option>
-                  <option value="ban">{t('gn.kk.warnActionBan')}</option>
-                </select>
-                {r.action === 'ban' && <input className="input w-28 font-mono" aria-label={t('gn.kk.warnBanTime')} value={r.time} maxLength={12} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, time: e.target.value } : x)))} />}
-                <button type="button" className="btn btn-ghost btn-sm" aria-label={t('common.remove')} onClick={() => set('ladder', (f.ladder ?? []).filter((_, j) => j !== i))}>{t('common.remove')}</button>
-              </div>
-            ))}
-          </div>
-        </WithPreview>
-      )}
-
-      {part === 'reasons' && (
-        <div className="space-y-3">
-          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsNote')}</p>
-          {f.reasons.length === 0 && <EmptyState icon={<IconEdit size={22} />} title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
-          <ul className="space-y-2">
-            {f.reasons.map((r, i) => (
-              <li key={i} className="flex flex-wrap items-center gap-2">
-                <input className="input w-20 font-mono" value={r.key} maxLength={12} aria-label={t('gn.kk.reasonKey')} placeholder="1" onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
-                <span aria-hidden className="text-mute">→</span>
-                <input className="input min-w-0 flex-1 basis-56" value={r.text} maxLength={100} aria-label={t('gn.kk.reasonText')} placeholder={t('gn.kk.reasonText')} onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('reasons', f.reasons.filter((_, j) => j !== i))}>{t('gn.rs.delete')}</button>
-              </li>
-            ))}
-          </ul>
-          <button type="button" className="btn btn-soft btn-sm" disabled={f.reasons.length >= 20} onClick={() => set('reasons', [...f.reasons, { key: String(f.reasons.length + 1), text: '' }])}>{t('gn.kk.reasonAdd')}</button>
-          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsEx', { key: f.reasons[0]?.key ?? '1', text: reasonText })}</p>
-        </div>
-      )}
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </FoldCard>
-  );
-}
-
 /** «через 10 / 5 / 1 минуту» before a planned restart: one switch */
 export function RestartCard({ enabled, onChange }: { enabled: boolean; onChange: (v: boolean) => void }) {
   useI18n();
@@ -166648,6 +166734,54 @@ export function RestartCard({ enabled, onChange }: { enabled: boolean; onChange:
     </FoldCard>
   );
 }
+
+
+/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). */
+export function ExtrasCard({ initial }: { initial: Extras }) {
+  useI18n();
+  const [discord, setDiscord] = useState(initial.discord);
+  const [tips, setTips] = useState(initial.tips.join('\n'));
+  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
+  const [saved, setSaved] = useState<Extras>(value);
+  const auto = useAutosave({
+    value,
+    saved,
+    delay: 900,
+    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
+    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
+  });
+
+  return (
+    <FoldCard
+      id="extras"
+      title={t('gn.x.title')}
+      summary={t('gn.x.sum', { discord: value.discord || '—', n: value.tips.length })}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
+      <Field label={t('gn.x.discord')}>
+        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
+      </Field>
+      <Field label={t('gn.x.tips')}>
+        <AutoText className="min-h-24 text-sm" value={tips} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
+      </Field>
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsChatCard.tsx" << '__COREGSM_EOF__'
+/** The card of the game chat in Discord, with the preview of the messages. */
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { api } from '../api';
+import { Switch } from '../components/Switch';
+import { FoldCard } from '../components/GameNewsParts';
+import { t, useI18n } from '../i18n';
+import { ANSI_COLORS, CHAT_KINDS, CHAT_PRESETS, type AnsiColor, type ChatColors, type ChatKind, type ChatSettings } from '../gameNews';
+import { ScopeNote, useScope } from './GameNewsScope';
+import { SayCheck } from './GameNewsSayCheck';
+import { Field, SaveBadge, errText, toast, useAutosave } from '../ui';
 
 /** the colours of an ansi block of Discord, as Discord draws them on a dark background */
 const ANSI_CSS: Record<AnsiColor, string> = {
@@ -166948,40 +167082,6 @@ export function ChatCard({ initial, joinText, leaveText, kickText }: { initial: 
     </FoldCard>
   );
 }
-
-/** what {discord} and {tip} stand for: a link or a name, and a list of tips (one at random each time). */
-export function ExtrasCard({ initial }: { initial: Extras }) {
-  useI18n();
-  const [discord, setDiscord] = useState(initial.discord);
-  const [tips, setTips] = useState(initial.tips.join('\n'));
-  const value: Extras = { discord: discord.trim(), tips: tips.split('\n').map((x) => x.trim()).filter(Boolean) };
-  const [saved, setSaved] = useState<Extras>(value);
-  const auto = useAutosave({
-    value,
-    saved,
-    delay: 900,
-    validate: (v) => (v.tips.length > 20 ? t('gn.x.tooMany') : null),
-    save: async (v) => { await api('/game-news/extras', 'PUT', v); setSaved(v); },
-  });
-
-  return (
-    <FoldCard
-      id="extras"
-      title={t('gn.x.title')}
-      summary={t('gn.x.sum', { discord: value.discord || '—', n: value.tips.length })}
-      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
-    >
-      <p className="text-sm font-semibold text-mute">{t('gn.x.note')}</p>
-      <Field label={t('gn.x.discord')}>
-        <input className="input" value={discord} maxLength={100} placeholder="discord.gg/..." onChange={(e) => setDiscord(e.target.value)} />
-      </Field>
-      <Field label={t('gn.x.tips')}>
-        <AutoText className="min-h-24 text-sm" value={tips} placeholder={t('gn.x.tipsEx')} onChange={(e) => setTips(e.target.value)} />
-      </Field>
-      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
-    </FoldCard>
-  );
-}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsConnections.tsx" << '__COREGSM_EOF__'
@@ -167126,6 +167226,60 @@ function ConnectionRow({ r, compact, many, repeat }: { r: Row; compact: boolean;
         {r.leave?.removedBy && <p className="font-semibold text-warn">{t('gn.cn.removed', { why: r.leave.removedBy })}</p>}
       </div>
     </li>
+  );
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsFields.tsx" << '__COREGSM_EOF__'
+/** Small fields that several cards of the game plugin share. */
+import { useState } from 'react';
+import { t } from '../i18n';
+import { SWATCHES, isHex } from '../gameNews';
+
+export const onOff = (b: boolean) => (b ? t('gn.f.on') : t('gn.f.off'));
+
+/** a colour: the palette, the system picker and a HEX box */
+const RECENT_KEY = 'coregsm.gn.recentColors';
+const readRecent = (): string[] => { try { return (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as string[]).filter(isHex).slice(0, 6); } catch { return []; } };
+const SWATCH_HEX = new Set(SWATCHES.map((c) => c.hex));
+
+export function ColorField({ label, value, onChange, gameHex }: { label: string; value: string; onChange: (v: string) => void; gameHex?: string }) {
+  const [recent, setRecent] = useState<string[]>(readRecent);
+  // a colour that was picked stays in the «recent» row of every colour field (kept in this browser)
+  const remember = (v: string) => {
+    if (!isHex(v) || SWATCH_HEX.has(v.toUpperCase())) return;
+    const next = [v.toUpperCase(), ...readRecent().filter((x) => x.toUpperCase() !== v.toUpperCase())].slice(0, 6);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    setRecent(next);
+  };
+  return (
+    <div className="space-y-1.5">
+      <span className="text-sm font-bold">{label}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {SWATCHES.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`h-7 w-7 rounded-full border ${value.toUpperCase() === c.hex ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`}
+            style={{ background: c.hex }}
+            aria-label={`${label}: ${c.hex}`}
+            aria-pressed={value.toUpperCase() === c.hex}
+            onClick={() => onChange(c.hex)}
+          />
+        ))}
+        <input type="color" className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent p-0.5" value={isHex(value) ? value : '#FFFFFF'} aria-label={label} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+        <input className="input w-28 font-mono text-sm" value={value} maxLength={7} aria-label={`${label} HEX`} onChange={(e) => onChange(e.target.value)} onBlur={() => remember(value)} />
+        {gameHex && value.toUpperCase() !== gameHex && <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(gameHex)}>{t('gn.col.game')}</button>}
+      </div>
+      {recent.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-mute">{t('gn.col.recent')}</span>
+          {recent.map((c) => (
+            <button key={c} type="button" className={`h-6 w-6 rounded-full border ${value.toUpperCase() === c ? 'border-ink ring-2 ring-ink/40' : 'border-line'}`} style={{ background: c }} aria-label={`${label}: ${c}`} onClick={() => onChange(c)} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 __COREGSM_EOF__
@@ -167413,6 +167567,271 @@ export function JournalTab({ onReuse, onPlayer }: { onReuse: (text: string) => v
   );
 }
 
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/pages"
+  cat > "$APP_DIR/core-frontend/src/pages/GameNewsKickCard.tsx" << '__COREGSM_EOF__'
+/** The card of the moderation commands: kick, ban, warnings and the ladder. */
+import { useState } from 'react';
+import { api } from '../api';
+import { Switch } from '../components/Switch';
+import { AutoText, FoldCard, VarChips } from '../components/GameNewsParts';
+import { ChatLines } from '../components/NewsEditor';
+import { t, useI18n } from '../i18n';
+import { kickLine, modLine, DEFAULT_KICK, isHex, type KickSettings } from '../gameNews';
+import { ScopeNote, useScope } from './GameNewsScope';
+import { EmptyState, SubTabs, WithPreview } from './GameNewsUi';
+import { ChannelName, ChannelPicker } from '../components/ChannelPicker';
+import { Field, SaveBadge, useAutosave } from '../ui';
+import { IconEdit } from '../icons';
+import { ColorField } from './GameNewsFields';
+
+/**
+ * Moderation from the game (.kick, .ban, .warn, .unban): how it reads in the chat (words and colours of the nickname, the reason and the
+ * administrator), what it asks for and refuses, what the player is told in private, how long a warning counts, the short names of reasons.
+ * Everything is set here; one card, one setting, four parts.
+ */
+export function KickCard({ initial }: { initial: KickSettings }) {
+  useI18n();
+  const sc = useScope();
+  const [f, setF] = useState<KickSettings>(initial);
+  const [saved, setSaved] = useState<KickSettings>(initial);
+  const [part, setPart] = useState<'kick' | 'ban' | 'warn' | 'reasons'>('kick');
+  const set = <K extends keyof KickSettings>(k: K, v: KickSettings[K]) => setF((x) => ({ ...x, [k]: v }));
+  const auto = useAutosave({
+    value: f,
+    saved,
+    delay: 900,
+    validate: (v) => {
+      if ([v.template, v.banTemplate, v.warnTemplate, v.unbanTemplate, v.banJoinText, v.blockJoinText, v.notifyText, v.defaultReason].some((x) => !x.trim())) return t('gn.hint.text');
+      if (![v.textColor, v.nameColor, v.reasonColor, v.adminColor].every(isHex)) return t('gn.jl.badColor');
+      if (v.reasons.some((r) => !r.key.trim() || !r.text.trim())) return t('gn.kk.reasonEmpty');
+      return null;
+    },
+    save: async (v) => { await api(`/game-news/kick-settings${sc.q}`, 'PUT', v); setSaved(v); sc.changed(); },
+  });
+  const safe = (v: KickSettings): KickSettings => ({ ...v, textColor: isHex(v.textColor) ? v.textColor : DEFAULT_KICK.textColor, nameColor: isHex(v.nameColor) ? v.nameColor : DEFAULT_KICK.nameColor, reasonColor: isHex(v.reasonColor) ? v.reasonColor : DEFAULT_KICK.reasonColor, adminColor: isHex(v.adminColor) ? v.adminColor : DEFAULT_KICK.adminColor });
+  const sv = safe(f);
+  const reasonText = f.reasons[0]?.text ?? f.defaultReason;
+  const priv = (text: string, vars: { reason?: string; n?: number; limit?: number; until?: string; left?: string }) =>
+    modLine({ ...sv, nameColor: sv.textColor, adminColor: sv.textColor, reasonColor: '#FFCC33' }, text.replace(/\{until\}/g, vars.until ?? '').replace(/\{left\}/g, vars.left ?? ''), { reason: vars.reason, n: vars.n, limit: vars.limit });
+  const [pickLog, setPickLog] = useState(false);
+  const varsAll = [{ name: 'name', example: 'WhiteLegioN' }, { name: 'reason', example: reasonText }, { name: 'admin', example: 'Админ' }];
+
+  const switchRow = (key: 'requireReason' | 'protectAdmins' | 'announce' | 'notifyPlayer', label: Parameters<typeof t>[0], note: Parameters<typeof t>[0]) => (
+    <label key={key} className="flex items-start gap-3 font-bold">
+      <Switch className="mt-0.5" checked={f[key]} onChange={(v) => set(key, v)} />
+      <span>{t(label)}<span className="block text-sm font-semibold text-mute">{t(note)}</span></span>
+    </label>
+  );
+
+  return (
+    <FoldCard
+      id="kick"
+      title={t('gn.kk.title')}
+      summary={f.enabled ? t('gn.kk.sumOn') : t('gn.kk.sumOff')}
+      on={f.enabled}
+      status={<SaveBadge status={auto.status} error={auto.error} retry={auto.retry} />}
+    >
+      <ScopeNote part="kick" />
+      <p className="text-sm font-semibold text-mute">{t('gn.kk.note')}</p>
+
+      <label className="flex items-center gap-3 font-bold">
+        <Switch checked={f.enabled} onChange={(v) => set('enabled', v)} />
+        {t('gn.kk.enabled')}
+      </label>
+
+      <SubTabs
+        label={t('gn.kk.title')}
+        value={part}
+        onChange={setPart}
+        items={[{ id: 'kick', label: t('gn.kk.p.kick') }, { id: 'ban', label: t('gn.kk.p.ban') }, { id: 'warn', label: t('gn.kk.p.warn') }, { id: 'reasons', label: t('gn.kk.p.reasons'), badge: f.reasons.length }]}
+      />
+
+      {part === 'kick' && (
+        <div className="space-y-4">
+          <WithPreview
+            preview={(
+              <>
+                <ChatLines lines={f.announce ? [kickLine(sv, 'WhiteLegioN', reasonText, 'Админ'), kickLine(sv, 'WhiteLegioN', f.defaultReason, 'Админ')] : []} />
+                {f.notifyPlayer && <ChatLines lines={[priv(f.notifyText, { reason: reasonText })]} />}
+                {!f.announce && <p className="text-sm font-semibold text-mute">{t('gn.kk.quiet')}</p>}
+              </>
+            )}
+          >
+            <Field label={t('gn.kk.template')}>
+              <AutoText value={f.template} maxLength={300} onChange={(e) => set('template', e.target.value)} />
+            </Field>
+            <VarChips vars={varsAll} onPick={(v) => set('template', `${f.template} ${v}`.trim())} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <ColorField label={t('gn.kk.textColor')} value={f.textColor} gameHex={DEFAULT_KICK.textColor} onChange={(v) => set('textColor', v)} />
+              <ColorField label={t('gn.kk.nameColor')} value={f.nameColor} gameHex={DEFAULT_KICK.nameColor} onChange={(v) => set('nameColor', v)} />
+              <ColorField label={t('gn.kk.reasonColor')} value={f.reasonColor} gameHex={DEFAULT_KICK.reasonColor} onChange={(v) => set('reasonColor', v)} />
+              <ColorField label={t('gn.kk.adminColor')} value={f.adminColor} gameHex={DEFAULT_KICK.adminColor} onChange={(v) => set('adminColor', v)} />
+            </div>
+          </WithPreview>
+
+          <div className="space-y-2">
+            {switchRow('announce', 'gn.kk.announce', 'gn.kk.announceNote')}
+            {switchRow('notifyPlayer', 'gn.kk.notify', 'gn.kk.notifyNote')}
+          </div>
+          {f.notifyPlayer && (
+            <Field label={t('gn.kk.notifyText')}>
+              <AutoText value={f.notifyText} maxLength={300} onChange={(e) => set('notifyText', e.target.value)} />
+            </Field>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label={t('gn.kk.defaultReason')}>
+              <input className="input" value={f.defaultReason} maxLength={100} onChange={(e) => set('defaultReason', e.target.value)} />
+            </Field>
+            <Field label={t('gn.kk.cooldown')}>
+              <input className="input w-32" type="number" min={0} max={3600} value={f.cooldownSec} onChange={(e) => set('cooldownSec', Number(e.target.value))} />
+            </Field>
+            <Field label={t('gn.kk.block')}>
+              <input className="input w-32" type="number" min={0} max={1440} value={f.rejoinBlockMin} onChange={(e) => set('rejoinBlockMin', Number(e.target.value))} />
+            </Field>
+          </div>
+          {f.rejoinBlockMin > 0 && (
+            <Field label={t('gn.kk.blockText')}>
+              <AutoText value={f.blockJoinText} maxLength={300} onChange={(e) => set('blockJoinText', e.target.value)} />
+            </Field>
+          )}
+
+          <div className="space-y-2">
+            {switchRow('requireReason', 'gn.kk.requireReason', 'gn.kk.requireReasonNote')}
+            {switchRow('protectAdmins', 'gn.kk.protect', 'gn.kk.protectNote')}
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-line px-4 py-3">
+            <div className="font-extrabold">{t('gn.kk.logTitle')}</div>
+            <p className="text-sm font-semibold text-mute">{t('gn.kk.logNote')}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {f.logChannelId ? <ChannelName id={f.logChannelId} /> : <span className="pill pill-mute">{t('gn.kk.logNone')}</span>}
+              <button type="button" className="btn btn-soft btn-sm" onClick={() => setPickLog((v) => !v)}>{f.logChannelId ? t('gn.kk.logChange') : t('gn.kk.logPick')}</button>
+              {f.logChannelId && <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('logChannelId', '')}>{t('gn.kk.logOff')}</button>}
+            </div>
+            {pickLog && <ChannelPicker id="kick-log" value={f.logChannelId} onChange={(v) => { if (/^\d{15,25}$/.test(v)) { set('logChannelId', v); setPickLog(false); } }} />}
+          </div>
+        </div>
+      )}
+
+      {part === 'ban' && (
+        <WithPreview
+          preview={(
+            <>
+              <ChatLines lines={f.announce ? [modLine(sv, f.banTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', time: t('gn.kk.sampleTime') }), modLine(sv, f.unbanTemplate, { name: 'WhiteLegioN', admin: 'Админ' })] : []} />
+              <ChatLines lines={[priv(f.banJoinText, { reason: reasonText, until: t('gn.kk.sampleUntil') })]} />
+            </>
+          )}
+        >
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.banEnabled} onChange={(v) => set('banEnabled', v)} />
+            {t('gn.kk.banEnabled')}
+          </label>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.banNote')}</p>
+          <Field label={t('gn.kk.banTemplate')}>
+            <AutoText value={f.banTemplate} maxLength={300} onChange={(e) => set('banTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[...varsAll, { name: 'time', example: t('gn.kk.sampleTime') }]} onPick={(v) => set('banTemplate', `${f.banTemplate} ${v}`.trim())} />
+          <Field label={t('gn.kk.unbanTemplate')}>
+            <AutoText value={f.unbanTemplate} maxLength={300} onChange={(e) => set('unbanTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[{ name: 'name', example: 'WhiteLegioN' }, { name: 'admin', example: 'Админ' }]} onPick={(v) => set('unbanTemplate', `${f.unbanTemplate} ${v}`.trim())} />
+          <Field label={t('gn.kk.banJoin')}>
+            <AutoText value={f.banJoinText} maxLength={300} onChange={(e) => set('banJoinText', e.target.value)} />
+          </Field>
+          <VarChips vars={[{ name: 'reason', example: reasonText }, { name: 'until', example: t('gn.kk.sampleUntil') }]} onPick={(v) => set('banJoinText', `${f.banJoinText} ${v}`.trim())} />
+          <Field label={t('gn.kk.banScope')}>
+            <p className="mb-1 text-xs text-mute">{t('gn.kk.banScopeHint')}</p>
+            <select className="input w-64" value={f.banScope} onChange={(e) => set('banScope', e.target.value === 'server' ? 'server' : 'all')}>
+              <option value="all">{t('gn.kk.banScopeAll')}</option>
+              <option value="server">{t('gn.kk.banScopeServer')}</option>
+            </select>
+          </Field>
+          <label className="flex items-start gap-3 font-bold">
+            <Switch className="mt-0.5" checked={f.banDm} onChange={(v) => set('banDm', v)} />
+            <span>{t('gn.kk.banDm')}<span className="block text-sm font-semibold text-mute">{t('gn.kk.banDmNote')}</span></span>
+          </label>
+        </WithPreview>
+      )}
+
+      {part === 'warn' && (
+        <WithPreview preview={<ChatLines lines={f.announce ? [modLine(sv, f.warnTemplate, { name: 'WhiteLegioN', reason: reasonText, admin: 'Админ', n: 2, limit: f.warnLimit })] : []} />}>
+          <label className="flex items-center gap-3 font-bold">
+            <Switch checked={f.warnEnabled} onChange={(v) => set('warnEnabled', v)} />
+            {t('gn.kk.warnEnabled')}
+          </label>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.warnNote')}</p>
+          <Field label={t('gn.kk.warnTemplate')}>
+            <AutoText value={f.warnTemplate} maxLength={300} onChange={(e) => set('warnTemplate', e.target.value)} />
+          </Field>
+          <VarChips vars={[...varsAll, { name: 'n', example: '2' }, { name: 'limit', example: String(f.warnLimit) }]} onPick={(v) => set('warnTemplate', `${f.warnTemplate} ${v}`.trim())} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnLimit')}>
+              <input className="input w-32" type="number" min={0} max={20} value={f.warnLimit} onChange={(e) => set('warnLimit', Number(e.target.value))} />
+            </Field>}
+            <Field label={t('gn.kk.warnDays')}>
+              <input className="input w-32" type="number" min={1} max={365} value={f.warnDays} onChange={(e) => set('warnDays', Number(e.target.value))} />
+            </Field>
+            {!(f.ladder ?? []).length && <Field label={t('gn.kk.warnAction')}>
+              <select className="input w-48" value={f.warnAction} onChange={(e) => set('warnAction', e.target.value === 'ban' ? 'ban' : 'kick')}>
+                <option value="kick">{t('gn.kk.warnActionKick')}</option>
+                <option value="ban">{t('gn.kk.warnActionBan')}</option>
+              </select>
+            </Field>}
+            {!(f.ladder ?? []).length && f.warnAction === 'ban' && (
+              <Field label={t('gn.kk.warnBanTime')}>
+                <p className="mb-1 text-xs text-mute">{t('gn.kk.warnBanTimeHint')}</p>
+                <input className="input w-32 font-mono" value={f.warnBanTime} maxLength={12} onChange={(e) => set('warnBanTime', e.target.value)} />
+              </Field>
+            )}
+          </div>
+          <div className="space-y-2" data-testid="warn-ladder">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="font-extrabold">{t('gn.kk.ladder')}</h4>
+                <p className="text-sm font-semibold text-mute">{t('gn.kk.ladderNote')}</p>
+              </div>
+              <button type="button" className="btn btn-soft btn-sm" disabled={(f.ladder ?? []).length >= 6} onClick={() => set('ladder', [...(f.ladder ?? []), { at: Math.max(0, ...(f.ladder ?? []).map((x) => x.at)) + 1, action: 'kick', time: '1d' }])}>{t('gn.kk.ladderAdd')}</button>
+            </div>
+            {(f.ladder ?? []).map((r, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-bold">{t('gn.kk.ladderAt')}</span>
+                <input className="input w-20" type="number" min={1} max={50} aria-label={t('gn.kk.ladderAt')} value={r.at} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, at: Number(e.target.value) } : x)))} />
+                <select className="input w-40" aria-label={t('gn.kk.warnAction')} value={r.action} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, action: e.target.value === 'ban' ? 'ban' : 'kick' } : x)))}>
+                  <option value="kick">{t('gn.kk.warnActionKick')}</option>
+                  <option value="ban">{t('gn.kk.warnActionBan')}</option>
+                </select>
+                {r.action === 'ban' && <input className="input w-28 font-mono" aria-label={t('gn.kk.warnBanTime')} value={r.time} maxLength={12} onChange={(e) => set('ladder', (f.ladder ?? []).map((x, j) => (j === i ? { ...x, time: e.target.value } : x)))} />}
+                <button type="button" className="btn btn-ghost btn-sm" aria-label={t('common.remove')} onClick={() => set('ladder', (f.ladder ?? []).filter((_, j) => j !== i))}>{t('common.remove')}</button>
+              </div>
+            ))}
+          </div>
+        </WithPreview>
+      )}
+
+      {part === 'reasons' && (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsNote')}</p>
+          {f.reasons.length === 0 && <EmptyState icon={<IconEdit size={22} />} title={t('gn.kk.reasonsEmpty')} hint={t('gn.kk.reasonsEmptyHint')} />}
+          <ul className="space-y-2">
+            {f.reasons.map((r, i) => (
+              <li key={i} className="flex flex-wrap items-center gap-2">
+                <input className="input w-20 font-mono" value={r.key} maxLength={12} aria-label={t('gn.kk.reasonKey')} placeholder="1" onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span aria-hidden className="text-mute">→</span>
+                <input className="input min-w-0 flex-1 basis-56" value={r.text} maxLength={100} aria-label={t('gn.kk.reasonText')} placeholder={t('gn.kk.reasonText')} onChange={(e) => set('reasons', f.reasons.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))} />
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => set('reasons', f.reasons.filter((_, j) => j !== i))}>{t('gn.rs.delete')}</button>
+              </li>
+            ))}
+          </ul>
+          <button type="button" className="btn btn-soft btn-sm" disabled={f.reasons.length >= 20} onClick={() => set('reasons', [...f.reasons, { key: String(f.reasons.length + 1), text: '' }])}>{t('gn.kk.reasonAdd')}</button>
+          <p className="text-sm font-semibold text-mute">{t('gn.kk.reasonsEx', { key: f.reasons[0]?.key ?? '1', text: reasonText })}</p>
+        </div>
+      )}
+      {auto.invalid && <p className="text-sm font-semibold text-danger">{auto.error}</p>}
+    </FoldCard>
+  );
+}
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/pages"
   cat > "$APP_DIR/core-frontend/src/pages/GameNewsLinks.tsx" << '__COREGSM_EOF__'
@@ -173050,23 +173469,16 @@ __COREGSM_EOF__
 import { useLive } from '../ui/live';
 import { haptic } from '../ui/haptic';
 import { useAppearance } from '../appearance';
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { lonelyTile, useGridColumns } from '../components/servers/gridLogic';
-import { nextUsualPeak, pickHeroBy, readHeroMode, saveHeroMode, type HeroMode } from '../components/servers/heroLogic';
-import { useBaseline } from '../components/servers/useBaseline';
+import { pickHeroBy, readHeroMode, saveHeroMode, type HeroMode } from '../components/servers/heroLogic';
 import { HomeBlocksMenu, useHomeBlocks } from '../components/servers/HomeBlocks';
 import { api, type Server, type StatusInfo } from '../api';
 import { useAuth } from '../auth';
-import { gameColor, gameGradient, gameLabel } from '../games';
-import { coverBackground, emblemStyle, gameBackdrop, coverUrlOf } from '../cover';
-import MaintenanceChip from '../components/MaintenanceChip';
 import LiveBadge from '../components/LiveBadge';
-import { AnimatedNumber, Burst, ErrorLine, GameAvatar, LoadError, IconServers, PageHead, Spark, StatusPill, ago, isLag, spanCaption, useSparkSpanMin, usePoll, toast, navigate, routeQuery, fmtTime, errText, useDayStats } from '../ui';
-import { connectGuide } from '../connectGuides';
+import { ErrorLine, LoadError, IconServers, PageHead, usePoll, toast, navigate, routeQuery } from '../ui';
 import { t, useI18n, type TKey } from '../i18n';
-import { calmSeriesColor, useCoverAccent } from '../components/server/coverAccent';
-import { pingTone, TONE_TEXT } from '../components/server/helpers';
-import { AddrCopy, PlayerStack, CapacityBar, useQuickLongPress, CountReact, ListSkeleton, NoFavsState, NoMatchState, NoServersState, PingBars, PlayerNames, StatusFlash, TilesSkeleton, TrendChip, durText, reactionOf, useServerReactions, type Reactions } from '../components/servers/serverUi';
+import { ListSkeleton, NoFavsState, NoMatchState, NoServersState, TilesSkeleton, useServerReactions } from '../components/servers/serverUi';
 import { ServersList, readView, saveView, type ListSort, type SelectProps, type ServersView } from '../components/servers/ServerViews';
 import CompareChart from '../components/servers/CompareChart';
 import { QuickMenu } from '../components/servers/QuickMenu';
@@ -173076,7 +173488,7 @@ import { BulkBar } from '../components/servers/BulkBar';
 import { needsAttention, type HeroReason, type OverviewData } from '../components/servers/overviewLogic';
 import NotFound from '../components/NotFound';
 import ServerDetail, { SERVER_TABS } from './ServerDetail';
-import { CardClock, CardMap, CardRefresh, CardTag, CardUptime } from '../components/servers/CardIcons';
+import { FavButton, HeroTile, PhoneRow, SmallTile, readOrder, saveOrder, type TileDnd } from '../components/servers/Tiles';
 
 /** /servers/rust-main: finds the number of the server by its short name and opens the usual address */
 function SlugGate({ slug, tab }: { slug: string; tab: string }) {
@@ -173184,32 +173596,10 @@ function greeting(name: string): string {
   return `${hello}, ${name.trim() || name}`;
 }
 
-/** `className` colours the star; `glass` is the variant for covers (white star on a translucent disc) */
-function FavButton({ on, name, onClick, className = '', glass = false }: { on: boolean; name: string; onClick: () => void; className?: string; glass?: boolean }) {
-  useI18n();
-  // the star pops (scale, tilt and a few sparks) only after the user's own click, not when the list loads
-  const [pops, setPops] = useState(0);
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); if (!on) setPops((n) => n + 1); onClick(); }}
-      className={`${glass ? 'btn-icon-glass btn-icon-sm' : 'btn-icon-ghost btn-icon-sm'} ${on ? '' : 'star-quiet'}`}
-      title={on ? t('d2.srv.favRemove') : t('d2.srv.fav')}
-      aria-label={t('d2.srv.favName', { name })}
-      aria-pressed={on}
-    >
-      <span className={`star-wrap text-xl leading-none ${className}`}>
-        <span key={on ? pops : 'off'} className={on && pops > 0 ? 'star-pop' : ''} aria-hidden>{on ? '★' : '☆'}</span>
-        {on && pops > 0 && <Burst key={pops} count={6} radius={15} />}
-      </span>
-    </button>
-  );
-}
 
 type Filter = 'all' | 'online' | 'offline' | 'fav';
 const FILTER_KEY = 'coregsm_server_filter';
 
-/** staggered entrance: the tile number goes to the --i custom property */
-const stagger = (i: number): CSSProperties => ({ ['--i' as string]: i });
 
 /** a phone (under the Tailwind `sm` width): the tiles become compact rows */
 function useIsPhone(): boolean {
@@ -173560,330 +173950,6 @@ function ServerList() {
         />
       )}
     </div>
-  );
-}
-
-type TileDnd = React.HTMLAttributes<HTMLElement> & { 'data-tile-id'?: number };
-const ORDER_KEY = 'coregsm_srv_order';
-const readOrder = (): number[] => {
-  try { const v = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]') as unknown; return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []; } catch { return []; }
-};
-const saveOrder = (ids: number[]) => { try { localStorage.setItem(ORDER_KEY, JSON.stringify(ids)); } catch { /* not remembered */ } };
-
-/** the checkbox of the selection mode in a corner of a card */
-function CardCheck({ s, select, className = '' }: { s: Server; select: SelectProps; className?: string }) {
-  useI18n();
-  return (
-    <input
-      type="checkbox"
-      className={`srv-check srv-check-card ${className}`}
-      checked={select.has(s.id)}
-      onChange={() => select.toggle(s.id)}
-      onClick={(e) => e.stopPropagation()}
-      aria-label={t('d2.news.pickOne', { title: s.name })}
-    />
-  );
-}
-
-/** in the selection mode a link toggles the card instead of leaving the page */
-const linkClick = (s: Server, select?: SelectProps) => (e: MouseEvent<HTMLElement>) => {
-  e.stopPropagation();
-  if (select?.on) {
-    e.preventDefault();
-    select.toggle(s.id);
-  }
-};
-
-function HeroTile({ s, idx, uptime, downSince, fav, onFav, onOpen, rx, reason, select }: { rx: Reactions; s: Server; idx: number; uptime?: number; downSince?: number; fav: boolean | null; onFav: () => void; onOpen: () => void; reason: HeroReason; select?: SelectProps }) {
-  const sparkSpan = useSparkSpanMin(s.id);
-  useI18n();
-  const [c1] = gameGradient(s.game);
-  const lag = isLag(s);
-  const r = reactionOf(rx, s.id);
-  const emb = emblemStyle(s.coverUrl, s.game);
-  const cover = coverUrlOf(s.coverUrl, s.game, false);
-  const { swallow, ...lp } = useQuickLongPress();
-  const { isAdmin } = useAuth();
-  const baseline = useBaseline(s.id);
-  const peak = s.online ? nextUsualPeak(baseline, Date.now()) : null;
-  const play = connectGuide(s.game, s.address).link;
-  const full = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.9;
-  const [polling, setPolling] = useState(false);
-  const pollNow = async (e: MouseEvent<HTMLElement>) => {
-    e.stopPropagation();
-    setPolling(true);
-    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
-    setPolling(false);
-  };
-  return (
-    <article
-      {...lp}
-      className={`hero3 tile-in tile-hover relative cursor-pointer overflow-hidden rounded-ui-xl text-white shadow-soft ${s.online ? '' : 'is-down'} ${reason === 'attention' ? 'hero-attn' : ''} ${full ? 'is-full' : ''} ${s.online && lag ? 'is-lag' : ''}`}
-      style={{
-        ...stagger(idx),
-        ['--gc' as string]: gameColor(s.game),
-        boxShadow: `${select?.has(s.id) ? '0 0 0 3px rgb(var(--brand)), ' : reason === 'attention' ? `0 0 0 3px rgb(var(${s.online ? '--warn' : '--bad'}) / .85), ` : ''}0 1px 2px rgba(20,24,40,.06), 0 18px 40px -16px ${c1}66`,
-      }}
-      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
-    >
-      {select?.on && <CardCheck s={s} select={select} className="left-2 top-2" />}
-
-      <div className="h3-l">
-        <div className="h3-head flex items-start gap-3">
-          <GameAvatar game={s.game} size={46} glass vtId={s.id} />
-          <div className="min-w-0 flex-1">
-            {reason && reason !== 'attention' && <span className="hero-reason">{t(`srv.hero.${reason}` as const)}</span>}
-            <h2 className="line-clamp-2 wrap-break-word text-xl font-extrabold leading-tight" title={s.name}>
-              <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className="hover:underline">{s.name}</a>
-            </h2>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-fs-sm font-bold text-white/85">
-              <span>{gameLabel(s.game)}</span>
-              <span aria-hidden>·</span>
-              <AddrCopy address={s.address} className="truncate font-mono text-xs font-semibold" />
-            </div>
-            {s.maintenance && <MaintenanceChip m={s.maintenance} glass className="mt-1.5" />}
-          </div>
-        </div>
-
-        {s.online ? (
-          <>
-            <div className={`h3-count flex flex-wrap items-baseline gap-x-2.5 gap-y-1 ${s.players === 0 ? 'is-zero' : ''}`}>
-              <CountReact r={r} onDark><AnimatedNumber value={s.players} className="text-[72px] font-extrabold leading-none tracking-[-0.05em] sm:text-[88px]" /></CountReact>
-              <span className="text-lg font-bold text-white/85">/ {t('d2.srv.nPlayers', { n: s.maxPlayers })}</span>
-            </div>
-            <div className="h3-sub flex flex-wrap items-center gap-x-4 gap-y-1">
-              <TrendChip serverId={s.id} onDark />
-              {s.ping != null && <span className="inline-flex items-center gap-1.5 font-bold text-white/90"><PingBars ping={s.ping} tone={pingTone(s.ping).tone} />{t('d2.srv.ping', { ms: s.ping })}</span>}
-              {peak && <span className="hero-peak" title={t('srv.hero.peakTip', { n: peak.value })}>{peak.now ? t('srv.hero.peakNow') : t('srv.hero.peakAt', { time: fmtTime(peak.at), h: peak.hoursAhead })}</span>}
-            </div>
-            <CapacityBar className="h3-bar" players={s.players} max={s.maxPlayers} color="#fff" onDark />
-            <PlayerNames names={s.playerNames ?? []} max={4} onDark />
-            {play && (
-              <div className="h3-cta">
-                <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>
-              </div>
-            )}
-          </>
-        ) : (
-          // a server that is down: what is wrong and since when, instead of the figures
-          <div className="h3-down rounded-2xl bg-white/10 px-4 py-3" title={s.error ?? undefined}>
-            {s.hasStatus ? (
-              <>
-                <p className="line-clamp-3 text-base font-extrabold leading-snug">{s.error ?? t('d2.srv.noReply')}</p>
-                <p className="mt-1 text-sm font-semibold text-white/80">{downSince ? t('srv.down.for', { d: durText(Date.now() - downSince) }) + ' · ' : ''}{t('d2.srv.lastReply', { ago: ago(s.updatedAt) })}</p>
-              </>
-            ) : (
-              <p className="text-base font-extrabold">{t('d2.srv.waitFirst')}</p>
-            )}
-          </div>
-        )}
-
-        <div className="h3-foot flex flex-wrap items-center text-fs-sm font-bold text-white/80">
-          <span className="h3-fact"><CardClock />{spanCaption(sparkSpan)}</span>
-          {uptime != null && <span className="h3-fact"><CardUptime />{t('d2.srv.uptime', { v: (Math.round(uptime * 10) / 10).toLocaleString('ru-RU') })}</span>}
-          {s.online && s.map && <span className="h3-fact"><CardMap />{t('d2.srv.map', { map: s.map })}</span>}
-          {s.version && <span className="h3-fact"><CardTag />v{s.version}</span>}
-          {!s.online && <span className="h3-fact"><CardRefresh />{t('d2.srv.updated', { ago: ago(s.updatedAt) })}</span>}
-        </div>
-      </div>
-
-      <div
-        className={`h3-r ${emb.className ? 'emblem-host' : ''}`}
-        style={{ ...emb.style, ['--h3-cover' as string]: cover ? `url("${cover}")` : 'none', ['--h3-fallback' as string]: gameBackdrop(c1) }}
-      >
-        {emb.className && <span aria-hidden className="emblem-layer" />}
-        <div className="h3-actions flex items-center gap-1">
-          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
-          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/80'} glass />}
-          <QuickMenu s={s} glass />
-        </div>
-        {s.online ? (
-          <div className="h3-chart">
-            <Spark serverId={s.id} color="#ffffff" variant="hero" />
-          </div>
-        ) : (
-          <div className="h3-downpane">
-            <span className="h3-down-k">{t('srv.down.k')}</span>
-            <b className="h3-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
-            <span className="h3-down-s">{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
-            {isAdmin && <button type="button" className="btn btn-glass btn-sm" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
-          </div>
-        )}
-      </div>
-    </article>
-  );
-}
-
-/** the phone version of a tile: one row (emblem, name with a thin bar, players, status dot) at least 56 px high */
-function PhoneRow({ s, idx, fav, onFav, onOpen, select }: { rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
-  useI18n();
-  const lag = isLag(s);
-  const tone = !s.hasStatus ? 'bg-mute' : !s.online ? 'bg-bad' : lag || s.maintenance ? 'bg-warn' : 'bg-ok';
-  const { swallow, ...lp } = useQuickLongPress();
-  return (
-    <article
-      {...lp}
-      className={`srv-row tile-in relative ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'}`}
-      style={stagger(idx)}
-      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
-    >
-      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <GameAvatar game={s.game} size={40} vtId={s.id} />
-      <div className="srv-row-main">
-        <h3 className="text-fs-base font-extrabold leading-tight" title={s.name}>
-          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)}>{s.name}</a>
-        </h3>
-        {s.online ? (
-          <CapacityBar className="srv-row-bar" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" showPct={false} slots={false} />
-        ) : (
-          <p className="truncate text-fs-sm font-semibold text-mute">{s.hasStatus ? t('d2.srv.noReplyAgo', { ago: ago(s.updatedAt) }) : t('d2.srv.waitFirst')}</p>
-        )}
-      </div>
-      <div className="srv-row-count">
-        {s.online ? <><b>{s.players}</b><span>/{s.maxPlayers}</span></> : <span>–</span>}
-      </div>
-      <span className={`srv-row-dot ${tone}`} aria-hidden />
-      {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-warn' : 'text-mute'} />}
-      {/* the menu that a long touch opens: out of sight, its button is pressed by the touch handler */}
-      <span className="srv-row-qm" aria-hidden><QuickMenu s={s} /></span>
-    </article>
-  );
-}
-
-/** a server with nobody on it: not a grey zero and an empty bar, but when somebody was last there, the peak of the day and when it usually fills up */
-function EmptyNow({ s, accent }: { s: Server; accent?: string }) {
-  useI18n();
-  const day = useDayStats(s.id);
-  const baseline = useBaseline(s.id);
-  const usual = nextUsualPeak(baseline, Date.now(), 24);
-  return (
-    <div className="srv-empty px-1.5">
-      <div className="srv-empty-head">
-        <b><i aria-hidden />{t('srv.empty.title')}<small>/ {s.maxPlayers}</small></b>
-        {s.ping != null && <span className={`inline-flex items-center gap-1.5 text-fs-sm font-bold ${TONE_TEXT[pingTone(s.ping).tone]}`}><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</span>}
-      </div>
-      <CapacityBar className="mt-1" players={0} max={s.maxPlayers} color="rgb(var(--ink) / .5)" slots={false} />
-      <ul>
-        {day.known && <li>{day.lastActiveMin == null ? t('srv.empty.noneDay') : t('srv.empty.last', { d: durText(Math.max(1, day.lastActiveMin) * 60_000) })}</li>}
-        {day.known && day.peak > 0 && <li>{t('srv.empty.peak', { n: day.peak })}</li>}
-        {usual && !usual.now && <li>{t('srv.empty.usual', { time: fmtTime(usual.at) })}</li>}
-      </ul>
-      {accent && <div className="srv-spark-wrap" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
-    </div>
-  );
-}
-
-function SmallTile({ s, idx, fav, onFav, onOpen, rx, select, uptime, downSince, dnd, wide }: { dnd?: TileDnd; wide?: number; rx: Reactions; s: Server; idx: number; fav: boolean | null; onFav: () => void; onOpen: () => void; select?: SelectProps; uptime?: number; downSince?: number }) {
-  useI18n();
-  const [who, setWho] = useState(false);
-  const [c1] = gameGradient(s.game);
-  // the accent is taken from the cover picture, so two games of the same colour family still look different
-  const accent = calmSeriesColor(useCoverAccent(s.coverUrl, gameColor(s.game)), gameColor(s.game));
-  const lag = isLag(s);
-  const r = reactionOf(rx, s.id);
-  const emb = emblemStyle(s.coverUrl, s.game);
-  const nearFull = s.online && s.maxPlayers > 0 && s.players / s.maxPlayers >= 0.8;
-  // as many people as at the busiest moment of the day (a real crowd, not two players on a quiet server)
-  const dayStats = useDayStats(s.id);
-  const atPeak = s.online && dayStats.known && dayStats.peak >= 5 && s.players >= dayStats.peak;
-  const { swallow, ...lp } = useQuickLongPress();
-  const { isAdmin } = useAuth();
-  const unnamed = s.name === s.address || s.name === `${s.host}:${s.port}`;
-  const play = connectGuide(s.game, s.address).link;
-  const [polling, setPolling] = useState(false);
-  const pollNow = async (e: MouseEvent<HTMLElement>) => {
-    e.stopPropagation();
-    setPolling(true);
-    try { await api(`/servers/${s.id}/refresh`, 'POST'); toast(t('srv.hero.polled')); } catch (err) { toast(errText(err), 'err'); }
-    setPolling(false);
-  };
-  const planned = async (e: MouseEvent<HTMLElement>) => {
-    e.stopPropagation();
-    setPolling(true);
-    const now = Date.now();
-    try { await api('/maintenance', 'POST', { serverId: s.id, name: t('srv.planned.name'), startTs: now, endTs: now + 3_600_000, repeat: 'none' }); toast(t('srv.planned.done')); } catch (err) { toast(errText(err), 'err'); }
-    setPolling(false);
-  };
-  const copyAddr = async (e: MouseEvent<HTMLElement>) => {
-    e.stopPropagation();
-    try { await navigator.clipboard.writeText(s.address); toast(t('srv.addr.copied')); } catch { /* the address stays on the tile */ }
-  };
-  return (
-    <article
-      {...dnd}
-      {...lp}
-      className={`srv-tile tile tile-in tile-hover relative flex cursor-pointer flex-col gap-2 p-3 pb-4 ${select?.has(s.id) ? 'srv-selected' : ''} ${s.online ? '' : 'is-down'} ${nearFull ? 'is-busy' : ''} ${s.online && lag ? 'is-lag' : ''} ${wide && wide > 1 ? 'srv-wide' : ''}`}
-      // the fuller the server, the stronger its glow in the game's colour
-      style={{ ...stagger(idx), ...(wide && wide > 1 ? { gridColumn: `span ${wide}` } : {}), ['--gc' as string]: accent, ['--fill' as string]: s.online && s.maxPlayers > 0 ? Math.min(1, s.players / s.maxPlayers).toFixed(2) : '0' }}
-      onClick={select?.on ? () => select.toggle(s.id) : () => { if (!swallow()) onOpen(); }}
-    >
-      {select?.on && <CardCheck s={s} select={select} className="left-1 top-1" />}
-      <div className={`${emb.className} relative flex h-[124px] items-start justify-between rounded-ui-lg p-3 ${s.online ? '' : 'offline-cover'}`} style={{ ...emb.style, background: coverBackground(s.coverUrl, gameBackdrop(c1, 135), { small: true, game: s.game }) }}>
-        <span aria-hidden className="cover-scrim" />
-        <GameAvatar game={s.game} size={46} glass vtId={s.id} />
-        <div className="srv-cover-actions flex items-center gap-0.5">
-          <StatusFlash r={r}><StatusPill glass online={s.online} known={s.hasStatus} lag={lag} maintenance={!!s.maintenance} /></StatusFlash>
-          {fav != null && <FavButton on={fav} name={s.name} onClick={onFav} className={fav ? 'text-white' : 'text-white/85'} glass />}
-          <QuickMenu s={s} glass />
-        </div>
-        {/* the way in without opening the server: shown under the pointer (and by the keyboard), not on a phone */}
-        <div className="srv-hover-actions">
-          {s.online && play && <a className="btn btn-glass btn-sm" href={play.href} onClick={(e) => e.stopPropagation()}>{play.label}</a>}
-          <button type="button" className="btn btn-glass btn-sm" onClick={(e) => void copyAddr(e)}>{t('srv.tile.copy')}</button>
-        </div>
-      </div>
-
-      <div className="px-1.5">
-        <h3 className="srv-name text-fs-lg font-extrabold leading-tight" title={s.name}>
-          <a href={`/servers/${s.id}`} onClick={linkClick(s, select)} className={unnamed ? 'srv-unnamed hover:text-link' : 'hover:text-link'} title={unnamed && isAdmin ? t('srv.unnamed.tip') : undefined}>{unnamed ? t('srv.unnamed') : s.name}</a>
-        </h3>
-        <div className="srv-chips">{nearFull && <span className="srv-badge-full" title={t('srv.cap.nearFull', { pct: Math.round((s.players / s.maxPlayers) * 100) })}>{t('srv.tile.full')}</span>}<span className="srv-game truncate">{gameLabel(s.game)}</span>{s.online && s.map && <span className="srv-chip" title={t('d2.srv.mapTitle', { map: s.map })}><CardMap />{s.map}</span>}{s.version && <span className="srv-chip" title={t('d2.srv.version')}><CardTag />v{s.version}</span>}</div>
-        {s.maintenance && <MaintenanceChip m={s.maintenance} className="mt-1" />}
-      </div>
-
-      {s.online && s.players === 0 ? (
-        <EmptyNow s={s} accent={accent} />
-      ) : s.online ? (
-        <>
-          <div className={`srv-count flex items-baseline gap-1.5 px-1.5 ${s.players === 0 ? 'srv-zero' : ''}`}>
-            <CountReact r={r}><AnimatedNumber value={s.players} className="text-[38px] font-extrabold leading-none tracking-[-0.03em]" /></CountReact>
-            <span className="text-fs-xl font-bold text-mute">/ {s.maxPlayers}</span>
-            <TrendChip serverId={s.id} />
-            {atPeak && <span className="srv-peak-chip" title={t('srv.tile.dayPeakHint', { n: dayStats.peak })}>★ {t('srv.tile.dayPeak')}</span>}
-            {(s.playerNames?.length ?? 0) > 0 && <button type="button" className="srv-who" aria-label={t('srv.who')} title={t('srv.who')} aria-expanded={who} onClick={(e) => { e.stopPropagation(); setWho((v) => !v); }}>{(s.playerNames?.length ?? 0) === 1 ? <span className="srv-who-one">{s.playerNames[0]}</span> : <PlayerStack names={s.playerNames ?? []} />}</button>}
-            <span className={`ml-auto inline-flex items-center gap-1.5 text-fs-sm font-bold ${s.ping != null ? TONE_TEXT[pingTone(s.ping).tone] : 'text-mute'}`} title={s.ping != null ? t('d2.srv.ping', { ms: s.ping }) : undefined}>{s.ping != null && <><i className={`ping-dot ${pingTone(s.ping).tone}`} aria-hidden />{t('d2.bot.ms', { n: s.ping })}</>}</span>
-          </div>
-          <CapacityBar className="px-1.5" players={s.players} max={s.maxPlayers} color="rgb(var(--ink) / .5)" />
-          {who && <PlayerNames className="px-1.5" names={s.playerNames ?? []} max={12} />}
-          {s.players === 0
-            ? <p className="srv-empty-now"><i aria-hidden />{t('srv.empty.now')}</p>
-            : <div className="srv-spark-wrap px-1.5" title={t('srv.spark.hint')}><Spark serverId={s.id} color={accent} /></div>}
-        </>
-      ) : (
-        s.hasStatus ? (
-          <>
-            <div className="srv-down mx-1.5" title={s.error ?? undefined}>
-              <span className="srv-down-k"><i aria-hidden />{t('srv.down.k')}</span>
-              <b className="srv-down-v">{downSince ? durText(Date.now() - downSince) : ago(s.updatedAt)}</b>
-              <span className="srv-down-s">{downSince ? t('srv.down.since', { when: new Date(downSince).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }) + ' · ' : ''}{t('srv.down.last', { ago: ago(s.updatedAt) })}</span>
-              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} onClick={(e) => void pollNow(e)}>{polling ? t('d2.sd.polling') : t('srv.hero.poll')}</button>}
-              {isAdmin && <button type="button" className="btn btn-soft btn-sm srv-down-btn" disabled={polling} title={t('srv.planned.hint')} onClick={(e) => void planned(e)}>{t('srv.planned.btn')}</button>}
-            </div>
-            <div className="srv-off-fig px-1.5" aria-hidden><b>{t('srv.off.fig')}</b><i /></div>
-          </>
-        ) : (
-          <div className="mx-1.5 rounded-xl bg-soft px-3 py-2.5 text-fs-sm font-bold text-mute">{t('d2.srv.waitFirst')}</div>
-        )
-      )}
-
-      <div className="mt-auto flex items-center justify-between gap-2 px-1.5 pt-1 text-xs font-bold text-mute">
-        <AddrCopy address={s.address} className="min-w-0 font-mono" split />
-        <span className="flex shrink-0 items-center gap-2">
-          {uptime != null && <span className={`srv-up ${uptime >= 99 ? 'ok' : uptime >= 95 ? 'warn' : 'bad'}`} title={t('d2.srv.uptime30')}><small className="srv-up-l">{t('srv.up.label')}</small> {(Math.round(uptime * 10) / 10).toLocaleString('ru-RU')}%</span>}
-          {s.online ? (s.updatedAt != null && Date.now() - s.updatedAt > 120_000 ? ago(s.updatedAt) : '') : ago(s.updatedAt)}
-        </span>
-      </div>
-    </article>
   );
 }
 __COREGSM_EOF__
@@ -174293,8 +174359,8 @@ function UptimeBar({ s }: { s: StatusServer }) {
 function Latency({ s }: { s: StatusServer }) {
   const vals = (s.latency ?? []).filter((v): v is number => v != null);
   if (vals.length < 2) return null;
-  let prev = vals[0];
-  const filled = (s.latency ?? []).map((v) => (v == null ? prev : (prev = v)));
+  // an hour without an answer repeats the value before it
+  const filled = (s.latency ?? []).reduce<number[]>((out, v) => { out.push(v ?? out[out.length - 1] ?? vals[0]); return out; }, []);
   const lo = Math.min(...vals);
   const hi = Math.max(...vals);
   // the 100 ms line only matters when the ping is near it; with a quiet ping the chart zooms in on the data instead

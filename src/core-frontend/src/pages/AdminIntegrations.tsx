@@ -241,7 +241,7 @@ function SnippetsSection({ servers }: { servers: Server[] }) {
                 <Snippet label="BBCode" text={sn.bbcode} />
               </div>
               <div className={`space-y-3 ${snipTab === 'widget' ? '' : 'hidden'}`}>
-                <iframe key={sn.widget} title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
+                <iframe key={sn.widget} sandbox="allow-scripts allow-same-origin allow-popups" title={t('intg.snip.widgetTitle')} src={sn.widget} style={{ width: `min(100%, ${WIDGET_PX[size].w}px)`, height: WIDGET_PX[size].h }} className="block rounded-2xl border-0" loading="lazy" />
                 <Snippet label={t('intg.snip.widget')} text={sn.iframe} />
               </div>
               <div className={`space-y-3 md:col-span-2 ${snipTab === 'card' ? '' : 'hidden'}`}>

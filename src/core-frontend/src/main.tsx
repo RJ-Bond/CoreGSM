@@ -1,4 +1,5 @@
 import React from 'react';
+import { keepInstallPrompt } from './installPrompt';
 import ReactDOM from 'react-dom/client';
 // variable Manrope (the Ember look): Latin and Cyrillic subsets, one file per subset covers weights 200-800 (font-black maps to 800).
 // Loaded with the main styles, not after the script has run: the rules only name the files, a font is fetched when text uses it, so the
@@ -64,7 +65,7 @@ void i18nReady().then(() => {
 // the browser offers to install the panel as an app: keep the offer for the «Установить приложение» button
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
-  (window as unknown as { __installPrompt?: Event }).__installPrompt = e;
+  keepInstallPrompt(e);
   window.dispatchEvent(new Event('coregsm:installable'));
 });
 if ('serviceWorker' in navigator) {

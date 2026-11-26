@@ -152,8 +152,8 @@ function UptimeBar({ s }: { s: StatusServer }) {
 function Latency({ s }: { s: StatusServer }) {
   const vals = (s.latency ?? []).filter((v): v is number => v != null);
   if (vals.length < 2) return null;
-  let prev = vals[0];
-  const filled = (s.latency ?? []).map((v) => (v == null ? prev : (prev = v)));
+  // an hour without an answer repeats the value before it
+  const filled = (s.latency ?? []).reduce<number[]>((out, v) => { out.push(v ?? out[out.length - 1] ?? vals[0]); return out; }, []);
   const lo = Math.min(...vals);
   const hi = Math.max(...vals);
   // the 100 ms line only matters when the ping is near it; with a quiet ping the chart zooms in on the data instead

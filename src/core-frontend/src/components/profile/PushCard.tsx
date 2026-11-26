@@ -1,5 +1,6 @@
 /** Profile → Безопасность: notifications on this device (Web Push), the same as the inbox in the header. */
 import { useEffect, useState } from 'react';
+import { installPrompt, keepInstallPrompt } from '../../installPrompt';
 import { api } from '../../api';
 import { t, useI18n } from '../../i18n';
 import { Button, ErrorLine, Section, Switch, toast } from '../../ui';
@@ -12,8 +13,6 @@ const b64ToBytes = (s: string) => {
 };
 const supported = () => typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 
-interface InstallPrompt extends Event { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
-const installPrompt = () => (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt;
 
 interface Quiet { enabled: boolean; fromMin: number; toMin: number; tz: number }
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
@@ -62,7 +61,7 @@ export function PushCard() {
     await p.prompt();
     const { outcome } = await p.userChoice;
     if (outcome === 'accepted') {
-      (window as unknown as { __installPrompt?: InstallPrompt }).__installPrompt = undefined;
+      keepInstallPrompt(undefined);
       setInstallable(false);
     }
   };

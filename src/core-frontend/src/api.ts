@@ -40,8 +40,8 @@ export const setToken = (t: string) => {
 };
 
 // every request to our API proves it comes from this page (the server's CSRF guard for cookie sessions)
-if (typeof window !== 'undefined' && !(window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch) {
-  (window as unknown as { __coregsmFetch?: boolean }).__coregsmFetch = true;
+if (typeof window !== 'undefined' && !(window as unknown as { coregsmFetchPatched?: boolean }).coregsmFetchPatched) {
+  (window as unknown as { coregsmFetchPatched?: boolean }).coregsmFetchPatched = true;
   const native = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     try {

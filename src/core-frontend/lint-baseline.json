@@ -1,5 +1,4 @@
 {
-  "eslint(no-underscore-dangle)": 5,
   "jsx-a11y(click-events-have-key-events)": 8,
   "jsx-a11y(no-autofocus)": 12,
   "jsx-a11y(no-interactive-element-to-noninteractive-role)": 1,
@@ -10,6 +9,5 @@
   "react-hooks(exhaustive-deps)": 12,
   "react(exhaustive-effect-dependencies)": 49,
   "react(iframe-missing-sandbox)": 1,
-  "react(immutability)": 2,
   "react(memo-dependencies)": 3
 }

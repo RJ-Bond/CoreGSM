@@ -32,6 +32,20 @@ function hueGap(a: string, b: string): number {
   return Math.min(d, 360 - d);
 }
 
+/** the colour of each server's line: its game's colour, or a spare one when that hue is already taken */
+function spreadColors(servers: { id: number; game: string }[]): Map<number, string> {
+  const used: string[] = [];
+  let spare = 0;
+  const out = new Map<number, string>();
+  for (const s of servers) {
+    let c = gameColor(s.game);
+    for (let k = 0; used.some((u) => hueGap(u, c) < 28) && k < SPARE.length; k++) c = SPARE[spare++ % SPARE.length];
+    used.push(c);
+    out.set(s.id, c);
+  }
+  return out;
+}
+
 export default function CompareChart({ servers }: { servers: Server[] }) {
   useI18n();
   const [hours, setHours] = useState(24);
@@ -65,14 +79,7 @@ export default function CompareChart({ servers }: { servers: Server[] }) {
 
   // a line keeps its game's colour unless that hue is already taken by a line before it
   const colors = useMemo(() => {
-    const used: string[] = [];
-    let spare = 0;
-    return new Map(servers.map((s) => {
-      let c = gameColor(s.game);
-      for (let k = 0; used.some((u) => hueGap(u, c) < 28) && k < SPARE.length; k++) c = SPARE[spare++ % SPARE.length];
-      used.push(c);
-      return [s.id, c];
-    }));
+    return spreadColors(servers);
   }, [servers]);
 
   const series = useMemo(() => {
