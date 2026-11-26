@@ -16,7 +16,7 @@ interface language; the GitHub release text is built from the section of the ver
 
 ## Не выпущено | Unreleased
 
-## 1.2.75 · 22.11.2026
+## 1.2.80 · 26.11.2026
 
 ### 🐛 Исправлено | Fixed
 - 🐛 На карточках серверов порт в адресе показывался дважды (203.0.113.10:27015:27015) | On the server cards the port in the address was shown twice (203.0.113.10:27015:27015)
