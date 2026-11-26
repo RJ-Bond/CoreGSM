@@ -564,6 +564,8 @@ const en: Record<keyof typeof ru, string> = {
   'pf.a11y.lite': 'Data saver',
   'pf.a11y.shapes': 'Signs on statuses',
   'pf.a11y.shapesHint': 'A status carries a sign next to its colour: ✓ good, ! warning, ✕ bad. Handy if green and red are hard to tell apart.',
+  'pf.a11y.map': 'No map in the background',
+  'pf.a11y.mapHint': 'The contour lines and server marks behind the page are not drawn. With less motion or data saving the map stands still anyway.',
   'pf.preset.label': 'Ready-made look',
   'pf.preset.classic': 'Classic',
   'pf.preset.contrast': 'Contrast',

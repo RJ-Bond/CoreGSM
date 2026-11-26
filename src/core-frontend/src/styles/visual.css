@@ -126,3 +126,8 @@ html[data-shapes='1'] .adm-grp-head i, html[data-shapes='1'] .srv-mini-dot { bor
   --chart-fill: .22;
 }
 .chart-empty { display: grid; justify-items: center; gap: 4px; padding: 1.5rem 1rem; text-align: center; }
+
+/* the map of the land behind the page (components/MapBackground): under everything, over the page colour and its light */
+.map-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100lvh; z-index: -1; pointer-events: none; }
+html[data-game-art] .map-bg { opacity: .35; }
+@media print { .map-bg { display: none; } }

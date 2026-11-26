@@ -29,9 +29,9 @@ else
   APP_DIR=/opt/coregsm
 fi
 # set by tools/build-installer.sh: hash of all files embedded below (compared with version.txt in the repo)
-COREGSM_BUILD="39c271d3353d"
+COREGSM_BUILD="7b406f3eb0eb"
 # the readable version of this build (VERSION + counter), shown in the panel
-COREGSM_VERSION="1.2.81"
+COREGSM_VERSION="1.2.82"
 export DEBIAN_FRONTEND=noninteractive
 
 # ---------- colours ----------
@@ -123411,6 +123411,7 @@ __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/App.tsx" << '__COREGSM_EOF__'
 import { applyDefaultLook, useAppearance } from './appearance';
+import MapBackground from './components/MapBackground';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -123863,6 +123864,7 @@ export default function App() {
         {t('nav.skip')}
       </a>
       <RouteProgress routeKey={routeKey} />
+      <MapBackground />
       <Tooltips />
       <div className={`app-wrap mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
         {ember && <TopLine />}
@@ -125100,6 +125102,7 @@ import { useSyncExternalStore } from 'react';
  *   reduceMotion  -> data-motion="reduce"   (CSS switches animations and transitions off; without it the OS setting rules)
  *   largeText     -> data-text="large"      (root font scale 112.5 %)
  *   highContrast  -> data-contrast="high"   (stronger ink and borders)
+ *   noMap         -> data-nomap="1"       (the map behind the page is switched off)
  *   shapes        -> data-shapes="1"       (a status says its state with a sign as well as a colour: ✓ ! ✕)
  *   liteData      -> data-lite="1"          (data saving: no decorations or animations, polling twice as rare);
  *                    also on by itself when the browser asks for it (Save-Data, a 2G connection)
@@ -125111,6 +125114,8 @@ export interface Appearance {
   liteData: boolean;
   /** statuses carry a sign (✓ ! ✕) next to the colour: for those who tell green from red badly */
   shapes: boolean;
+  /** no map of the land behind the page */
+  noMap: boolean;
   /** pure black page and darker cards in the dark theme (saves an OLED screen, rests the eyes at night) */
   oled: boolean;
   /** the «Ember» look: graphite and an orange accent, firmer shapes (data-ember) */
@@ -125120,11 +125125,11 @@ export interface Appearance {
 /** presets: a few options at once; the ones not named are switched off */
 export type PresetId = 'classic' | 'ember' | 'contrast' | 'soft' | 'oled';
 export const PRESETS: Record<PresetId, Appearance> = {
-  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: false },
-  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: true },
-  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, shapes: false, oled: false, ember: false },
-  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, shapes: false, oled: false, ember: false },
-  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: true, ember: false },
+  classic: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, noMap: false, shapes: false, oled: false, ember: false },
+  ember: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, noMap: false, shapes: false, oled: false, ember: true },
+  contrast: { reduceMotion: false, largeText: true, highContrast: true, liteData: false, noMap: false, shapes: false, oled: false, ember: false },
+  soft: { reduceMotion: true, largeText: false, highContrast: false, liteData: true, noMap: false, shapes: false, oled: false, ember: false },
+  oled: { reduceMotion: false, largeText: false, highContrast: false, liteData: false, noMap: false, shapes: false, oled: true, ember: false },
 };
 export const PRESET_IDS = Object.keys(PRESETS) as PresetId[];
 /** the preset the options match exactly, or null (a custom mix) */
@@ -125148,12 +125153,12 @@ function readEmber(): boolean {
     return false;
   }
 }
-export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, shapes: false, oled: false, ember: false };
+export const DEFAULT_APPEARANCE: Appearance = { reduceMotion: false, largeText: false, highContrast: false, liteData: false, noMap: false, shapes: false, oled: false, ember: false };
 
 /** anything (a stored string, a broken value) -> a complete Appearance */
 export function normalizeAppearance(raw: unknown): Appearance {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, shapes: r.shapes === true, oled: r.oled === true, ember: r.ember === true };
+  return { reduceMotion: r.reduceMotion === true, largeText: r.largeText === true, highContrast: r.highContrast === true, liteData: r.liteData === true, shapes: r.shapes === true, noMap: r.noMap === true, oled: r.oled === true, ember: r.ember === true };
 }
 
 function read(): Appearance {
@@ -125191,6 +125196,7 @@ export function applyAppearance(a: Appearance, root: HTMLElement = document.docu
   set('data-contrast', a.highContrast ? 'high' : null);
   set('data-lite', a.liteData || networkWantsLite() ? '1' : null);
   set('data-shapes', a.shapes ? '1' : null);
+  set('data-nomap', a.noMap ? '1' : null);
   set('data-oled', a.oled ? '1' : null);
   set('data-ember', a.ember ? '1' : null);
   // the icon of the tab and of the home screen takes the colour of the look
@@ -125207,7 +125213,7 @@ export const getAppearance = () => current;
 
 export function setAppearance(patch: Partial<Appearance>) {
   const next = normalizeAppearance({ ...current, ...patch });
-  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.shapes === current.shapes && next.oled === current.oled && next.ember === current.ember) return;
+  if (patch.ember === undefined && next.reduceMotion === current.reduceMotion && next.largeText === current.largeText && next.highContrast === current.highContrast && next.liteData === current.liteData && next.shapes === current.shapes && next.noMap === current.noMap && next.oled === current.oled && next.ember === current.ember) return;
   current = next;
   try {
     // the look is stored on its own, and only when the visitor picks it: the administrator's default stays in force until then
@@ -129105,6 +129111,160 @@ export default function MaintenanceChip({ m, glass = false, className = '' }: { 
 }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/MapBackground.tsx" << '__COREGSM_EOF__'
+import { useEffect, useRef } from 'react';
+import { api, type Server } from '../api';
+import { useAppearance } from '../appearance';
+import { prefersReducedMotion } from '../useMotion';
+import { hillsFor, mix, placeMarks, rgba, ringPoint, tokenRgb, waveGlow, type Hill, type Mark, type MarkServer } from './mapBackgroundLogic';
+
+/** thirty frames a second are enough for slow lines */
+const FRAME_MS = 32;
+const SERVERS_MS = 60_000;
+
+/** should the picture stand still: the person asked for less motion, or the traffic and the device are spared */
+const still = () => prefersReducedMotion() || document.documentElement.dataset.lite === '1';
+
+function colours() {
+  const css = getComputedStyle(document.documentElement);
+  const read = (name: string, fallback: [number, number, number]) => tokenRgb(css.getPropertyValue(name), fallback);
+  const brand = read('--brand', [214, 66, 10]);
+  const ink = read('--ink', [244, 243, 241]);
+  const link = read('--link', brand);
+  return { line: mix(ink, brand, 0.45), bold: brand, glow: link, on: read('--ok', [74, 222, 128]), off: read('--bad', [248, 113, 113]), maint: read('--warn', [251, 191, 36]) };
+}
+
+function paint(ctx: CanvasRenderingContext2D, hills: Hill[], marks: Mark[], palette: ReturnType<typeof colours>, t: number, moving: boolean, width: number, height: number) {
+  ctx.clearRect(0, 0, width, height);
+  hills.forEach((h, n) => {
+    for (let k = 1; k <= h.rings; k++) {
+      ctx.beginPath();
+      for (let i = 0; i <= 90; i++) {
+        const [x, y] = ringPoint(h, k, (i / 90) * Math.PI * 2, t);
+        if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      }
+      ctx.closePath();
+      const main = k % 5 === 0;
+      ctx.strokeStyle = main ? rgba(palette.bold, 0.42) : rgba(palette.line, 0.13);
+      ctx.lineWidth = main ? 1.5 : 1;
+      ctx.stroke();
+      const glow = moving ? waveGlow(k, t, n, h.rings) : 0;
+      if (glow > 0.03) {
+        ctx.strokeStyle = rgba(palette.glow, glow * 0.6);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+  });
+  marks.forEach((m, i) => {
+    const [x, y] = ringPoint(hills[m.hill], m.ring, m.angle, t);
+    const c = palette[m.state];
+    if (moving) {
+      // a server that answers sends a calm ring; one that does not, a quicker one
+      const phase = (t * (m.state === 'off' ? 0.9 : 0.45) + i * 0.37) % 1;
+      ctx.beginPath();
+      ctx.arc(x, y, 5 + phase * 22, 0, Math.PI * 2);
+      ctx.strokeStyle = rgba(c, (1 - phase) * 0.75);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(c, 0.95);
+    ctx.fill();
+  });
+}
+
+/**
+ * The background of the panel: a map of the land behind the page. Decoration only (hidden from readers and clicks); the
+ * marks are the servers: green answers, red does not, amber is in maintenance. Stands still with less motion or data saving.
+ */
+function MapCanvas() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext?.('2d');
+    if (!canvas || !ctx) return;
+    let width = 0;
+    let height = 0;
+    let hills: Hill[] = [];
+    let marks: Mark[] = [];
+    let servers: MarkServer[] = [];
+    let palette = colours();
+    let frame = 0;
+    let last = 0;
+    let clock = 0;
+    let off = false;
+
+    const once = () => paint(ctx, hills, marks, palette, clock, !still(), width, height);
+    const resize = () => {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      const ratio = Math.min(1.5, window.devicePixelRatio || 1);
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      hills = hillsFor(width, height);
+      marks = placeMarks(servers, hills, width, height);
+      once();
+    };
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick);
+      if (now - last < FRAME_MS) return;
+      clock += Math.min(0.1, (now - last) / 1000);
+      last = now;
+      once();
+    };
+    // the loop runs only while motion is wanted; a hidden tab gets no frames from the browser by itself
+    const run = () => {
+      cancelAnimationFrame(frame);
+      if (still()) once();
+      else frame = requestAnimationFrame(tick);
+    };
+    const restyle = () => { palette = colours(); run(); };
+    const load = () => {
+      if (document.hidden) return;
+      api<Server[]>('/servers')
+        .then((list) => {
+          if (off || !Array.isArray(list)) return;
+          servers = list;
+          marks = placeMarks(servers, hills, width, height);
+          once();
+        })
+        .catch(() => { /* a closed panel or no connection: the map stays without marks */ });
+    };
+
+    resize();
+    run();
+    load();
+    const timer = window.setInterval(load, SERVERS_MS);
+    const watch = new MutationObserver(restyle);
+    watch.observe(document.documentElement, { attributes: true });
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const scheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+    media?.addEventListener?.('change', restyle);
+    scheme?.addEventListener?.('change', restyle);
+    window.addEventListener('resize', resize);
+    return () => {
+      off = true;
+      cancelAnimationFrame(frame);
+      window.clearInterval(timer);
+      watch.disconnect();
+      media?.removeEventListener?.('change', restyle);
+      scheme?.removeEventListener?.('change', restyle);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+  return <canvas ref={ref} className="map-bg" aria-hidden="true" data-testid="map-bg" />;
+}
+
+/** the map, unless it is switched off in the profile or the high contrast is on (lines behind text work against it) */
+export default function MapBackground() {
+  const [{ noMap, highContrast }] = useAppearance();
+  return noMap || highContrast ? null : <MapCanvas />;
+}
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
   cat > "$APP_DIR/core-frontend/src/components/ModerationCard.tsx" << '__COREGSM_EOF__'
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
@@ -132980,6 +133140,102 @@ function WipeForm({ server, wipe, onClose, onSaved }: { server: Server; wipe: Wi
     </Modal>
   );
 }
+__COREGSM_EOF__
+  mkdir -p "$APP_DIR/core-frontend/src/components"
+  cat > "$APP_DIR/core-frontend/src/components/mapBackgroundLogic.ts" << '__COREGSM_EOF__'
+/**
+ * The geometry of the background «a map of the land»: contour rings around three hills that slowly change their shape,
+ * a wave of light that runs from a top outwards, and a mark for every server of the panel. Pure: no canvas, no DOM.
+ */
+
+export interface Hill { x: number; y: number; rings: number; shape: number; step: number }
+
+/** the three hills in shares of the screen (they were drawn on a board of 1200 × 750) */
+const PLACES: { fx: number; fy: number; rings: number; shape: number }[] = [
+  { fx: 1150 / 1200, fy: 80 / 750, rings: 17, shape: 1.7 },
+  { fx: 260 / 1200, fy: 720 / 750, rings: 16, shape: 4.2 },
+  { fx: 760 / 1200, fy: 800 / 750, rings: 12, shape: 2.9 },
+];
+
+/** the hills of a screen: the rings grow with the screen, within limits, so a phone does not get a few giant ones */
+export function hillsFor(width: number, height: number): Hill[] {
+  const scale = Math.min(1.8, Math.max(0.7, Math.max(width / 1200, height / 750)));
+  return PLACES.map((p) => ({ x: p.fx * width, y: p.fy * height, rings: p.rings, shape: p.shape, step: 27 * scale }));
+}
+
+/** the point of ring `k` of a hill at angle `a`; `t` (seconds) bends the rings slowly */
+export function ringPoint(h: Hill, k: number, a: number, t: number): [number, number] {
+  const r = k * h.step;
+  const w = 1
+    + 0.16 * Math.sin(a * 3 + h.shape + k * 0.22 + t * 0.35)
+    + 0.09 * Math.sin(a * 5 - k * 0.31 + h.shape * 2 - t * 0.27)
+    + 0.04 * Math.sin(a * 9 + k * 0.5 + t * 0.5);
+  return [h.x + Math.cos(a) * r * w * 1.25, h.y + Math.sin(a) * r * w];
+}
+
+/** how bright ring `k` is while the wave of hill number `n` passes: 0 … 1 */
+export function waveGlow(k: number, t: number, n: number, rings: number): number {
+  const front = (t * 3.2 + n * 7) % (rings + 10);
+  return Math.exp(-((k - front) ** 2) / 1.6);
+}
+
+export type MarkState = 'on' | 'off' | 'maint';
+export interface MarkServer { id: number; online: boolean; hasStatus?: boolean; maintenance?: unknown }
+export interface Mark { id: number; hill: number; ring: number; angle: number; state: MarkState }
+
+type Spot = { hill: number; ring: number; angle: number; at: [number, number] };
+
+/** the width of the column the pages sit in: a mark behind it would not be seen */
+export const COLUMN = 1152;
+export const MAX_MARKS = 24;
+
+const hash = (n: number): number => {
+  const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+};
+
+/**
+ * Where each server stands on the map. A server keeps its place between visits (it comes from its number); places beside
+ * the column of the page are preferred, so the mark is seen. A server that was never asked is not shown.
+ */
+export function placeMarks(servers: MarkServer[], hills: Hill[], width: number, height: number): Mark[] {
+  const side = (width - COLUMN) / 2;
+  const free = (x: number, y: number) => y < 70 || y > height - 90 || (side > 24 ? x < side - 8 || x > width - side + 8 : false);
+  const inside = (x: number, y: number) => x > 14 && x < width - 14 && y > 14 && y < height - 14;
+  const taken: [number, number][] = [];
+  const out: Mark[] = [];
+  for (const s of servers.filter((x) => x.hasStatus !== false).slice(0, MAX_MARKS)) {
+    let fallback: Spot | null = null;
+    let found: Spot | null = null;
+    for (let i = 0; i < 60 && !found; i++) {
+      const seed = s.id * 61 + i;
+      const hill = Math.floor(hash(seed) * hills.length);
+      const ring = 2 + Math.floor(hash(seed + 0.37) * (hills[hill].rings - 4));
+      const angle = hash(seed + 0.71) * Math.PI * 2;
+      const at = ringPoint(hills[hill], ring, angle, 0);
+      if (!inside(at[0], at[1]) || taken.some((p) => Math.hypot(p[0] - at[0], p[1] - at[1]) < 46)) continue;
+      const c = { hill, ring, angle, at };
+      fallback ??= c;
+      if (free(at[0], at[1])) found = c;
+    }
+    const best = found ?? fallback;
+    if (!best) continue;
+    taken.push(best.at);
+    out.push({ id: s.id, hill: best.hill, ring: best.ring, angle: best.angle, state: s.maintenance ? 'maint' : s.online ? 'on' : 'off' });
+  }
+  return out;
+}
+
+/** «214 66 10» (a colour token of the theme) → three numbers; the fallback for a token that cannot be read */
+export function tokenRgb(raw: string, fallback: [number, number, number]): [number, number, number] {
+  const m = /^\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})/.exec(raw);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : fallback;
+}
+
+export const mix = (a: [number, number, number], b: [number, number, number], share: number): [number, number, number] =>
+  [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * share)) as [number, number, number];
+
+export const rgba = (c: [number, number, number], alpha: number): string => `rgba(${c[0]},${c[1]},${c[2]},${Math.max(0, Math.min(1, alpha)).toFixed(3)})`;
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src/components/news"
   cat > "$APP_DIR/core-frontend/src/components/news/Calendar.tsx" << '__COREGSM_EOF__'
@@ -137815,6 +138071,7 @@ export function AppearanceCard() {
     ['highContrast', 'pf.a11y.contrast', 'pf.a11y.contrastHint'],
     ['liteData', 'pf.a11y.lite', 'pf.a11y.liteHint'],
     ['shapes', 'pf.a11y.shapes', 'pf.a11y.shapesHint'],
+    ['noMap', 'pf.a11y.map', 'pf.a11y.mapHint'],
     ['oled', 'pf.a11y.oled', 'pf.a11y.oledHint'],
     ['ember', 'pf.a11y.ember', 'pf.a11y.emberHint'],
   ];
@@ -150379,6 +150636,8 @@ const en: Record<keyof typeof ru, string> = {
   'pf.a11y.lite': 'Data saver',
   'pf.a11y.shapes': 'Signs on statuses',
   'pf.a11y.shapesHint': 'A status carries a sign next to its colour: ✓ good, ! warning, ✕ bad. Handy if green and red are hard to tell apart.',
+  'pf.a11y.map': 'No map in the background',
+  'pf.a11y.mapHint': 'The contour lines and server marks behind the page are not drawn. With less motion or data saving the map stands still anyway.',
   'pf.preset.label': 'Ready-made look',
   'pf.preset.classic': 'Classic',
   'pf.preset.contrast': 'Contrast',
@@ -155952,6 +156211,8 @@ const ru = {
   'pf.a11y.lite': 'Экономия трафика',
   'pf.a11y.shapes': 'Знаки у статусов',
   'pf.a11y.shapesHint': 'Рядом с цветом у статусов стоит знак: ✓ хорошо, ! внимание, ✕ плохо. Удобно, если зелёный и красный трудно различать.',
+  'pf.a11y.map': 'Убрать карту на фоне',
+  'pf.a11y.mapHint': 'Линии рельефа и метки серверов за страницей больше не рисуются. При «Меньше движения» и экономии данных карта и так неподвижна.',
   'pf.preset.label': 'Готовый вид',
   'pf.preset.classic': 'Классика',
   'pf.preset.contrast': 'Контраст',
@@ -184488,6 +184749,11 @@ html[data-shapes='1'] .adm-grp-head i, html[data-shapes='1'] .srv-mini-dot { bor
   --chart-fill: .22;
 }
 .chart-empty { display: grid; justify-items: center; gap: 4px; padding: 1.5rem 1rem; text-align: center; }
+
+/* the map of the land behind the page (components/MapBackground): under everything, over the page colour and its light */
+.map-bg { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100lvh; z-index: -1; pointer-events: none; }
+html[data-game-art] .map-bg { opacity: .35; }
+@media print { .map-bg { display: none; } }
 __COREGSM_EOF__
   mkdir -p "$APP_DIR/core-frontend/src"
   cat > "$APP_DIR/core-frontend/src/ui.tsx" << '__COREGSM_EOF__'

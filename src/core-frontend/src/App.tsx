@@ -1,4 +1,5 @@
 import { applyDefaultLook, useAppearance } from './appearance';
+import MapBackground from './components/MapBackground';
 import { onPageTitleDetail, tabTitle } from './pageTitle';
 import { NewsUnreadDot } from './components/news/newsSeen';
 import { UpdateBadge, shownUpdate, useUpdatePolling, useUpdateState } from './components/UpdateBadge';
@@ -451,6 +452,7 @@ export default function App() {
         {t('nav.skip')}
       </a>
       <RouteProgress routeKey={routeKey} />
+      <MapBackground />
       <Tooltips />
       <div className={`app-wrap mx-auto min-h-full ${page === 'admin' ? 'max-w-[100rem]' : 'max-w-6xl'} px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:px-6 sm:pt-4 md:pb-16`}>
         {ember && <TopLine />}
